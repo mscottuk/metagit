@@ -1,40 +1,19 @@
 #!/opt/local/bin/python
 
+import os
 import sys
 import json
 import argparse
-from ldc import MetadataRepo
+from ldc import *
 import traceback
 
 #--lm
 
-verbose = True
-
-class FileActions:
-	dump = 1
-	json = 2
-	default = dump | json
-
-def printjson(blob):
-	data = json.loads(blob.data)
-	for key, value in data.iteritems():
-	  print '{:<20} {:<20}'.format(key,  value)
-
-def dumpfile(blob):
-	print blob.data
-  
 def parse_args():
 	# Create command line parser
 	parser = argparse.ArgumentParser(description='Manipulate a dataset\'s metadata')
-	
-	# Add sub-parsers
-	subparsers = parser.add_subparsers()
 
 	# Add top level arguments
-	parser.add_argument('--path', 
-						default=None,
-						help='The name of the metadata object')
-
 	parser.add_argument('--branch',
 						default="metadata",
 						help="The git branch to use for metadata")
@@ -42,90 +21,88 @@ def parse_args():
 	parser.add_argument('-v', '--verbose',
 						action='store_true',
 						default=False,
-						help="Verbose output")				
+						help="Verbose output")
 
-	parser_list = subparsers.add_parser('list')
-	parser_list.set_defaults(func=list)
-	parser_list.set_defaults(action=FileActions.default)
+	# Add sub-parsers
+	subparsers = parser.add_subparsers()
+
+	parser_get = subparsers.add_parser('get')
+	parser_get.set_defaults(command=get)
+	parser_get.set_defaults(fileaction=FileActions.default)
 
 	parser_add = subparsers.add_parser('add')
-	parser_add.set_defaults(func=add)
-
+	parser_add.set_defaults(command=add)
 
 	# Set up 'add' subparser
 	parser_add.add_argument('keyvaluepair',
-						nargs='?',
 						help='Key value pair to add to metadata')
 
-	# Set up 'list' subparser
-	parser_list.add_argument('--storeonly',
+	parser_add.add_argument('path',
+						nargs="?",
+						default=os.getcwd(),
+						help='The name of the metadata object')
+
+	# Set up 'get' subparser
+	parser_get.add_argument('path',
+						nargs="?",
+						default=os.getcwd(),
+						help='The name of the metadata object')
+
+	parser_get.add_argument('--storeonly',
 						action='store_true',
 						default=False,
 						help="The file specified only exists in the metadata store and does not have a matching file in the filesystem")
-						
-	group = parser_list.add_mutually_exclusive_group()
+
+	parser_get.add_argument('--key',
+						help="The key to lookup")
+
+	group = parser_get.add_mutually_exclusive_group()
 	group.add_argument('--dump',
-						dest='action',
+						dest='fileaction',
 						action='store_const',
 						const=FileActions.dump,
 						help='Do not parse the file in any way, just print it to stdout')
-						
+
 	group.add_argument('--json',
-						dest='action',
+						dest='fileaction',
 						action='store_const',
 						const=FileActions.json,
 						help='Parse the file as JSON and prettify the output')
 
 	args = parser.parse_args()
-	
-	global verbose
-	verbose = args.verbose
-	
+
 	return args
-	
-def list(args,repo):
-	blob = repo.get_metadata()
 
-	if repo.is_action(FileActions.json):
-		try:
-			printjson(blob)
-		except ValueError:
-			if repo.is_action(FileActions.dump):
-				dumpfile(blob)
-			else:
-				print "Not JSON data. Use --dump to show file anyway."
-	elif repo.is_action(FileActions.dump):
-		dumpfile(blob)
-
-
-def add(args,repo):
-
-	if args.keyvaluepair is None:
-		print "Not in key=value format"
-		return
-
+def get(args):
 	try:
-		blob = repo.get_metadata()
-		blobdata = json.loads(blob.data)
-	except MetadataRepo.MetadataBlobNotFoundError, e:
-		blobdata = json.loads("{}")
+		repo = MetadataRepo(args.path, args.branch, args.storeonly, args.verbose)
+		repo.print_metadata(args.fileaction)
+	except MatchingDataNotFoundError, e:
+		# Change the error message to include --storeonly argument
+		raise MatchingDataNotFoundError(e.message + ". Please use --storeonly to check in metadata store anyway.")
 
+def add(args):
+	# Separate the key and value
 	k, sep, v = args.keyvaluepair.partition("=")
-	if sep:
-		blobdata[k] = v
-		repo.save_metadata(blobdata)		
-	else:	
-		print "Not in key=value format"
+
+	# Check keyvaluepair argument is correct format
+	if sep != "=":
+		raise KeyValuePairArgumentError(KeyValuePairArgumentError.__doc__)
+
+	repo = MetadataRepo(args.path, args.branch, storeonly=False, debug=args.verbose)
+
+	repo.update_metadata(k,v)
 
 if __name__ == "__main__":
 
-	try:
-		args = parse_args()
-		repo = MetadataRepo(args)
-		args.func(args,repo)
+	# Parse the passed arguments, exiting if an unexpected error occurs
+	args = parse_args()
 
+	# Execute the requested function
+	try:
+		args.command(args)
 	except Exception, e:
-		if verbose:
+		if args.verbose:
 			traceback.print_exc()
 		else:
 			print e
