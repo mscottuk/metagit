@@ -7,7 +7,17 @@ import argparse
 from ldc import *
 import traceback
 
-#--lm
+# Command line syntax:
+#   m [-h] [--branch BRANCH] [-v] {get,add}
+#   m add [-h] keyvaluepair [path]
+#   m get [-h] [--storeonly] [--key KEY] [--dump | --json] [path]
+#
+# Examples:
+#   m add author="Charles Darwin" orgin.pdf
+#   m add title="On the Origin of Species" orgin.pdf
+#   m get orgin.pdf
+#   m get --key author origin.pdf
+
 
 def parse_args():
 	# Create command line parser
@@ -30,14 +40,14 @@ def parse_args():
 	parser_get.set_defaults(command=get)
 	parser_get.set_defaults(fileaction=FileActions.default)
 
-	parser_add = subparsers.add_parser('add')
-	parser_add.set_defaults(command=add)
+	parser_set = subparsers.add_parser('set')
+	parser_set.set_defaults(command=set)
 
-	# Set up 'add' subparser
-	parser_add.add_argument('keyvaluepair',
+	# Set up 'set' subparser
+	parser_set.add_argument('keyvaluepair',
 						help='Key value pair to add to metadata')
 
-	parser_add.add_argument('path',
+	parser_set.add_argument('path',
 						nargs="?",
 						default=os.getcwd(),
 						help='The name of the metadata object')
@@ -75,13 +85,13 @@ def parse_args():
 
 def get(args):
 	try:
-		repo = MetadataRepo(args.path, args.branch, args.storeonly, args.verbose)
+		repo = Metadata(args.path, args.branch, args.storeonly, args.verbose)
 		repo.print_metadata(args.fileaction)
 	except MatchingDataNotFoundError, e:
 		# Change the error message to include --storeonly argument
 		raise MatchingDataNotFoundError(e.message + ". Please use --storeonly to check in metadata store anyway.")
 
-def add(args):
+def set(args):
 	# Separate the key and value
 	k, sep, v = args.keyvaluepair.partition("=")
 
@@ -89,7 +99,7 @@ def add(args):
 	if sep != "=":
 		raise KeyValuePairArgumentError(KeyValuePairArgumentError.__doc__)
 
-	repo = MetadataRepo(args.path, args.branch, storeonly=False, debug=args.verbose)
+	repo = Metadata(args.path, args.branch, storeonly=False, debug=args.verbose)
 
 	repo.update_metadata(k,v)
 
