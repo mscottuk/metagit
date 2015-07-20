@@ -67,13 +67,20 @@ class Metadata:
 		self.base_path = os.path.dirname(self.repo_path)
 		self.rel_req_path = self.abs_req_path[len(self.base_path)+1:]
 
-		if debug:
-			print "Repo=" + self.repo_path
-			print "Abs=" + self.abs_req_path
-			print "Rel="+ self.rel_req_path
+		# Add the trailing slash if the user added one
+		if self.req_path[-1] == os.sep and self.rel_req_path[-1] != os.sep:
+			self.rel_req_path += os.sep
+
+		self.debugmsg ("Repo=" + self.repo_path)
+		self.debugmsg ("Abs=" + self.abs_req_path)
+		self.debugmsg ("Rel="+ self.rel_req_path)
 
 		# Find metadata branch
 		self.find_metadata_branch()
+
+	def debugmsg(self,msg):
+		if self.debug:
+			print msg
 
 	def find_metadata_branch(self):
 		# Find metadata branch
@@ -107,10 +114,11 @@ class Metadata:
 				else:
 					raise MetadataBlobNotFoundError("Could not find metadata blob in the tree")
 			else:									# We are not in the right tree so move onto the next tree
+
 				nexttree=currenttree[nextitem]      # Find the sub-tree in the current tree
 				nexttreeitem=self.repo[nexttree.id] # Retrieve the tree from the repository using its ID
-				if isinstance(metadataitem,pygit2.Tree):
-					print "Found next tree " + nextitem
+				if isinstance(nexttreeitem,pygit2.Tree):
+					self.debugmsg("Found next tree " + nextitem)
 					return self.get_blob(treelist[1:],nexttreeitem)
 				else:
 					raise MetadataTreeNotFoundError("Could not find metadata with path specified (Tree " + nextitem + " not found")
@@ -120,47 +128,76 @@ class Metadata:
 	def get_metadata_blob(self,path):
 		return self.get_blob(path.split(os.sep),self.commit.tree)
 
-	def save_metadata(self,jsondict,path):
+	def write_tree_hierarchy(self,treelist,newentryid):
+		newentry = self.repo[newentryid]
+		nextitem = treelist[-1]   # Get last entry (work backwards in tree list)
 
-		# Create an object to save in the repository
-		newfile = json.dumps(jsondict)
+		 # Python does the right thing here for most strings and lists so no need to check the length of treelist
+		metadatapath = os.sep.join(treelist[0:-1])
 
+	   	# This is the first time this has been called so there is no tree to link to
+		# We have an empty string so the path points to a folder
+		if isinstance(newentry, pygit2.Blob) and len(nextitem)==0:
+			newentryname = "_folder_metadata.json" # Folder metadata
+		else:
+			newentryname = nextitem
+
+		self.debugmsg("Looking for " + metadatapath + newentryname)
+
+		try:
+			tree = self.repo.revparse_single('{0}:{1}'.format(self.branch.name,metadatapath))
+			treebuilder = self.repo.TreeBuilder(tree)
+		except KeyError:
+			treebuilder = self.repo.TreeBuilder()
+
+		if isinstance(newentry, pygit2.Blob):
+			print "Writing blob"
+			# Create a new tree with the blob in it, editing the last tree in the path if it exists.
+			treebuilder.insert(newentryname,newentry.id,pygit2.GIT_FILEMODE_BLOB)
+		elif isinstance(newentry, pygit2.Tree):
+			print "Writing tree"
+			# Create a new tree which points to the blob's tree, editing the last but one tree in the path if it exists.
+			treebuilder.insert(newentryname,newentry.id,pygit2.GIT_FILEMODE_TREE)
+		else:
+			raise Exception("Expected blob or tree, got " + str(type(newentry)))
+
+		treebuilderid = treebuilder.write()
+
+		self.debugmsg("Tree saved as " + treebuilderid.__str__())
+
+		if len(treelist) > 1:
+			# Recurse up the tree, pass modified tree to next call of function
+			return self.write_tree_hierarchy(treelist[0:-1],treebuilderid)
+		else:
+			return treebuilderid
+
+	def save_file(self,newfile,path):
 		# Save the object into the repository
 		newblobid = self.repo.create_blob(newfile)
 
-		# Create a new tree with the blob in it, editing the last tree in the path if it exists.
-
-		# Create a new tree which points to the blob's tree, editing the last but one tree in the path if it exists.
-
-		# Recurse up the tree
-
-		# WE CANNOT USE metadatatree ANY MORE.
-		# Do some iteration here to work out our tree.
-		# pathlist = path.split(os.sep)
-		# if len(pathlist)==1 and len(pathlist[0])==0:
-
-		if hasattr(self,'metadatatree'):
-			treebuilder = self.repo.TreeBuilder(self.metadatatree)
-		else:
-			treebuilder = self.repo.TreeBuilder()
-
-		treebuilder.insert(self.metadatafilename,newblobid,pygit2.GIT_FILEMODE_BLOB)
-		treebuilderid = treebuilder.write()
-		print "Tree saved as " + treebuilderid.__str__()
+		treelist = path.split(os.sep)
+		toptreeid = self.write_tree_hierarchy(treelist, newblobid)
 
 		# Create a commit
 		commitid = self.repo.create_commit(self.branch.name,
 			pygit2.Signature('Mark', 'cms4@soton.ac.uk'),
 			pygit2.Signature('Mark', 'cms4@soton.ac.uk'),
-			"Updated " + self.metadatafilename + " metadata",
-			treebuilderid,
+			"Updated metadata for " + path,
+			toptreeid,
 			[self.commit.id])
-
 		# Update the branch's reference to point to the commit
-		self.branchref.set_target(commitid,pygit2.Signature('Mark', 'cms4@soton.ac.uk'), "Updated " + self.metadatafilename + " metadata")
-		print "Commit saved as " + commitid.__str__()
+		# self.branchref.set_target(commitid,pygit2.Signature('Mark', 'cms4@soton.ac.uk'), "Updated metadata")
 
-		#branchref.log_append(commitid, pygit2.Signature('Mark', 'cms4@soton.ac.uk'), "Updated " + self.metadatafilename + " metadata")
+		self.debugmsg("Commit saved as " + commitid.__str__())
+
+		return commitid
+
+	def save_metadata(self,jsondict,path):
+
+		# Create an object to save in the repository
+		newfile = json.dumps(jsondict)
+
+		commitid = self.save_file(newfile)
 
 	def get_repo_path(self,abs_req_path,storeonly):
 		if os.path.exists(abs_req_path):
@@ -194,7 +231,7 @@ class Metadata:
 
 		return path
 
-	def print_metadata(self,fileaction,path=None):
+	def print_metadata(self,fileaction,path=None,keyfilter=None,valuefilter=None):
 
 		path=self.check_path_request(path)
 
@@ -205,7 +242,7 @@ class Metadata:
 
 		if FileActions.is_action(fileaction,FileActions.json):
 			try:
-				self.printjson(gitblob)
+				self.printjson(gitblob,keyfilter,valuefilter)
 			except ValueError:
 				if FileActions.is_action(fileaction,FileActions.dump):
 					self.dumpfile(gitblob)
@@ -214,10 +251,11 @@ class Metadata:
 		elif FileActions.is_action(fileaction,FileActions.dump):
 			self.dumpfile(gitblob)
 
-	def printjson(self,gitblob):
+	def printjson(self,gitblob,keyfilter=None,valuefilter=None):
 		data = json.loads(gitblob.data)
 		for key, value in data.iteritems():
-		  print '{:<20} {:<20}'.format(key,  value)
+			if (keyfilter is None or keyfilter==key.__str__()) and (valuefilter is None or valuefilter==value.__str__()):
+				print '{:<20} {:<20}'.format(key,  value)
 
 	def dumpfile(self,gitblob):
 		print gitblob.data

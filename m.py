@@ -66,6 +66,10 @@ def parse_args():
 	parser_get.add_argument('--key',
 						help="The key to lookup")
 
+	parser_get.add_argument('--value',
+						help="The value it must have")
+
+
 	group = parser_get.add_mutually_exclusive_group()
 	group.add_argument('--dump',
 						dest='fileaction',
@@ -86,7 +90,7 @@ def parse_args():
 def get(args):
 	try:
 		repo = Metadata(args.path, args.branch, args.storeonly, args.verbose)
-		repo.print_metadata(args.fileaction)
+		repo.print_metadata(args.fileaction,keyfilter=args.key,valuefilter=args.value)
 	except MatchingDataNotFoundError, e:
 		# Change the error message to include --storeonly argument
 		raise MatchingDataNotFoundError(e.message + ". Please use --storeonly to check in metadata store anyway.")
