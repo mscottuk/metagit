@@ -6,6 +6,7 @@ import json
 import argparse
 from ldc import *
 import traceback
+import re # Regular expressions
 
 # Command line syntax:
 #   m [-h] [--branch BRANCH] [-v] {get,add}
@@ -18,16 +19,43 @@ import traceback
 #   m get orgin.pdf
 #   m get --key author origin.pdf
 
+class ParsePathAction(argparse.Action):
+	branch_default = "metadata"
+	stream_default = "metadata"
+	path_default = os.getcwd()
+	syntax = "(metadatapath | [branch:]metadatapath:stream)"
+
+	def __call__(self, parser, namespace, values, option_string=None):
+
+		# Regular expression:
+		# first group can be blank (*) and is lazy (?), and is any char except ':'
+		# second group can be blank (*) to allow e.g. 'branch::metadata' for current directory, and is any char except ':'
+		# third group can be blank (*) and is lazy (?), and is any char except ':'
+		# Separating ':'s are optional to allow for branch and stream to be dropped to activate defaults
+		# dir                  = '', 'dir', ''
+		# branch:dir:metadata  = 'branch','dir','metadata'
+		# dir:metadata         = '','dir','metadata'
+		# branch::metadata     = 'branch','','metadata'
+		values_split = re.match(r'^([^:\r\n]*?):?([^:\r\n]*):?([^:\r\n]*?)$', values)
+
+		# Wrong format received - possibly too many ':'s in string
+		if values_split is None:
+			parser.error("Could not parse '%s'. Please use syntax %s." % (values, ParsePathAction.syntax))
+
+		branchname = values_split.group(1) or ParsePathAction.branch_default
+		path       = values_split.group(2) or ParsePathAction.path_default
+		streamname = values_split.group(3) or ParsePathAction.stream_default
+
+		setattr(namespace, self.dest, values)
+		setattr(namespace, 'branchname', branchname)
+		setattr(namespace, 'metadatapath', path)
+		setattr(namespace, 'streamname', streamname)
 
 def parse_args():
 	# Create command line parser
 	parser = argparse.ArgumentParser(description='Manipulate a dataset\'s metadata')
 
 	# Add top level arguments
-	parser.add_argument('--branch',
-						default="metadata",
-						help="The git branch to use for metadata")
-
 	parser.add_argument('-v', '--verbose',
 						action='store_true',
 						default=False,
@@ -49,14 +77,16 @@ def parse_args():
 
 	parser_set.add_argument('path',
 						nargs="?",
-						default=os.getcwd(),
-						help='The name of the metadata object')
+						default=ParsePathAction.path_default,
+						action=ParsePathAction,
+						help="%s The path to the metadata object. The default branch and stream will be used if not specified." % ParsePathAction.syntax)
 
 	# Set up 'get' subparser
 	parser_get.add_argument('path',
 						nargs="?",
-						default=os.getcwd(),
-						help='The name of the metadata object')
+						default=ParsePathAction.path_default,
+						action=ParsePathAction,
+						help="%s The path to the metadata object. The default branch and stream will be used if not specified." % ParsePathAction.syntax)
 
 	parser_get.add_argument('--storeonly',
 						action='store_true',
@@ -85,11 +115,18 @@ def parse_args():
 
 	args = parser.parse_args()
 
+	if args.verbose:
+		print "path specified: " + args.path
+		print "branch        : " + args.branchname
+		print "metadatapath  : " + args.metadatapath
+		print "stream        : " + args.streamname
+
 	return args
+
 
 def get(args):
 	try:
-		repo = Metadata(args.path, args.branch, args.storeonly, args.verbose)
+		repo = Metadata(args.metadatapath, args.branchname, args.streamname, args.storeonly, args.verbose)
 		repo.print_metadata(args.fileaction,keyfilter=args.key,valuefilter=args.value)
 	except MatchingDataNotFoundError, e:
 		# Change the error message to include --storeonly argument
@@ -103,7 +140,7 @@ def set(args):
 	if sep != "=":
 		raise KeyValuePairArgumentError(KeyValuePairArgumentError.__doc__)
 
-	repo = Metadata(args.path, args.branch, storeonly=False, debug=args.verbose)
+	repo = Metadata(args.metadatapath, args.branchname, args.streamname, storeonly=False, debug=args.verbose)
 
 	repo.update_metadata(k,v)
 

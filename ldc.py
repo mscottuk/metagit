@@ -52,10 +52,11 @@ class MetadataBlob:
 
 class Metadata:
 
-	def __init__(self, req_path, branchname, storeonly, debug):
+	def __init__(self, req_path, branchname, streamname, storeonly, debug):
 
 		# Save miscellaneous arguments
 		self.branchname = branchname
+		self.streamname = streamname
 		self.storeonly = storeonly
 		self.debug = debug
 
@@ -121,7 +122,7 @@ class Metadata:
 					self.debugmsg("Found next tree " + nextitem)
 					return self.get_blob(treelist[1:],nexttreeitem)
 				else:
-					raise MetadataTreeNotFoundError("Could not find metadata with path specified (Tree " + nextitem + " not found")
+					raise MetadataTreeNotFoundError("Could not find metadata with path specified (Tree %s not found)" % nextitem)
 		except KeyError, e:
 			raise MetadataBlobNotFoundError("No metadata found for " + e.message) # Metadata object does not exist yet
 
