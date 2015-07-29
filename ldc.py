@@ -119,14 +119,6 @@ class Metadata:
 				if not isinstance(metadatablob,pygit2.Blob):
 					raise MetadataBlobNotFoundError("Could not find metadata blob in the tree")
 				return MetadataBlob(metadatablob,nextitem,currenttree)
-				# metadata=currenttree[Metadata.metadata_hash] # Lookup metadata
-				# metadatatree=self.repo[metadata.id]
-				# if not isinstance(metadatatree,pygit2.Tree):
-				# 	raise MetadataBlobNotFoundError("Could not find metadata tree")
-				# metadataitem=metadatatree[streamname]
-				# if not isinstance(metadataitem,pygit2.Blob):
-				# 	raise MetadataBlobNotFoundError("Could not find metadata blob in the tree")
-				# return MetadataBlob(metadataitem,metadatafilename,currenttree)
 			else:									# We are not in the right tree so move onto the next tree
 				nexttree=currenttree[nextitem]      # Find the sub-tree in the current tree
 				nexttreeitem=self.repo[nexttree.id] # Retrieve the tree from the repository using its ID
@@ -187,51 +179,6 @@ class Metadata:
 			return self.write_tree_hierarchy(parentslist[0:-1],treebuilderid)
 		else:
 			return treebuilderid
-
-	# def write_metadata_tree_hierarchy(self,parentslist,newentryid):
-	# 	newentry = self.repo[newentryid]
-	# 	nextitem = parentslist[-1]   # Get last entry (work backwards in tree list)
-	#
-	# 	 # Python does the right thing here for most strings and lists so no need to check the length of parentslist
-	# 	metadatapath = os.sep.join(parentslist[0:-1])
-	#
-	# 	newentryname = self.streamname #"_folder_metadata.json" # Folder metadata
-	#
-	#    	# This is the first time this has been called so there is no tree to link to
-	# 	# We have an empty string so the path points to a folder
-	# 	if isinstance(newentry, pygit2.Blob)
-	# 		parentname = Metadata.metadata_hash
-	# 	else:
-	# 		parentname = nextitem
-	#
-	# 	self.debugmsg("Looking for " + metadatapath + newentryname)
-	#
-	# 	try:
-	# 		tree = self.repo.revparse_single('{0}:{1}'.format(self.branch.name,metadatapath))
-	# 		treebuilder = self.repo.TreeBuilder(tree)
-	# 	except KeyError:
-	# 		treebuilder = self.repo.TreeBuilder()
-	#
-	# 	if isinstance(newentry, pygit2.Blob):
-	# 		print "Writing blob"
-	# 		# Create a new tree with the blob in it, editing the last tree in the path if it exists.
-	# 		treebuilder.insert(newentryname,newentry.id,pygit2.GIT_FILEMODE_BLOB)
-	# 	elif isinstance(newentry, pygit2.Tree):
-	# 		print "Writing tree"
-	# 		# Create a new tree which points to the blob's tree, editing the last but one tree in the path if it exists.
-	# 		treebuilder.insert(newentryname,newentry.id,pygit2.GIT_FILEMODE_TREE)
-	# 	else:
-	# 		raise Exception("Expected blob or tree, got " + str(type(newentry)))
-	#
-	# 	treebuilderid = treebuilder.write()
-	#
-	# 	self.debugmsg("Tree saved as " + treebuilderid.__str__())
-	#
-	# 	if len(parentslist) > 1:
-	# 		# Recurse up the tree, pass modified tree to next call of function
-	# 		return self.write_tree_hierarchy(parentslist[0:-1],treebuilderid)
-	# 	else:
-	# 		return treebuilderid
 
 	def get_metadata_blob_path(self,path,streamname):
 		parentspath = os.sep.join([path, Metadata.metadata_hash, streamname])
