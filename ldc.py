@@ -48,37 +48,42 @@ class FileActions:
 	def is_action(action,actioncmp):
 		return action & actioncmp == actioncmp
 
+class TextColor:
+	Red = '\033[31m'
+	Reset = '\033[0m'
 
-class MetadataBlob:
-	def __init__(self,metadataitem,metadatafilename,metadatatree):
-		self.metadatafilename=metadatafilename
-		self.metadatatree=metadatatree
-		self.metadataitem=metadataitem
+class MetadataContainer:
+	def __init__(self,metadatablob,datablob,datachanged):
+		self.metadatablob = metadatablob
+		self.datablob = datablob
+		self.datachanged = datachanged
+# 	def __init__(self,metadataitem,metadatafilename,metadatatree):
+# 		self.metadatafilename=metadatafilename
+# 		self.metadatatree=metadatatree
+# 		self.metadataitem=metadataitem
 
 class Metadata:
 
 	data_hash = hashlib.sha224('data').hexdigest()
 	metadata_hash = hashlib.sha224('metadata').hexdigest()
 
-	def __init__(self, req_path, branchname, streamname, storeonly, debug):
+	def __init__(self, req_path, branchname, debug):
 
 		# Save miscellaneous arguments
 		self.branchname = branchname
-		self.streamname = streamname
-		self.storeonly = storeonly
 		self.debug = debug
 
 		# Sort out paths
 		self.req_path = req_path
 		self.abs_req_path=os.path.abspath(req_path)
-		self.repo_path = self.get_repo_path(self.abs_req_path,storeonly)
+		self.repo_path = self.find_repository_path(self.abs_req_path)
 		self.repo = pygit2.Repository(self.repo_path)
 		self.base_path = os.path.dirname(self.repo_path)
 		self.rel_req_path = self.abs_req_path[len(self.base_path)+1:]
 
 		# Add the trailing slash if the user added one
-		if self.req_path[-1] == os.sep and self.rel_req_path[-1] != os.sep:
-			self.rel_req_path += os.sep
+		# if self.req_path[-1] == os.sep and self.rel_req_path[-1] != os.sep:
+		# 	self.rel_req_path += os.sep
 
 		self.debugmsg ("Repo=" + self.repo_path)
 		self.debugmsg ("Abs=" + self.abs_req_path)
@@ -91,51 +96,155 @@ class Metadata:
 		if self.debug:
 			print msg
 
+	def find_repository_path(self,abs_req_path):
+		repo_search_path=abs_req_path
+		found = False
+
+		while not found:
+			try:
+				repo_path = os.path.abspath(pygit2.discover_repository(repo_search_path))
+				found = True
+			except KeyError:
+				# Break if we have a blank string or have reached the root directory
+				if repo_search_path in ["", os.path.abspath(os.sep)]:
+					break
+				# Otherwise, carry on looking up the tree
+				else:
+					repo_search_path = os.path.dirname(repo_search_path)
+
+		if found:
+			return repo_path
+		else:
+			raise NoRepositoryError("Could not find a Git repository")
+
 	def find_metadata_branch(self):
 		# Find metadata branch
 		self.branch = self.repo.lookup_branch(self.branchname)
 
-		# Find commit in metadata branch
 		if self.branch is None:
 			raise NoMetadataBranchError("Could not find metadata branch in the repository")
 
-		self.branchref = self.repo.lookup_reference(self.branch.name)
+		# Find commit in metadata branch
+		self.commit = self.branch.get_object()
 
-		commit = self.branch.get_object()
-
-		if not isinstance(commit,pygit2.Commit):
+		if not isinstance(self.commit,pygit2.Commit):
 			raise NoMetadataBranchError("Could not find metadata branch with commit in the repository")
 
-		self.commit=commit
+	# def get_blob(self,treelist,currenttree):
+	# 	nextitem = treelist[0]
+	# 	try:
+	# 		if len(treelist)==1:
+	# 			if len(nextitem)==0:
+	# 				raise MetadataRequestError("The request was not valid - check the stream name")
+	# 			metadata=currenttree[nextitem]
+	# 			metadatablob=self.repo[metadata.id]
+	# 			if not isinstance(metadatablob,pygit2.Blob):
+	# 				raise MetadataBlobNotFoundError("Could not find metadata blob in the tree")
+	# 			return MetadataBlob(metadatablob,nextitem,currenttree)
+	# 		else:									# We are not in the right tree so move onto the next tree
+	# 			nexttree=currenttree[nextitem]      # Find the sub-tree in the current tree
+	# 			nexttreeitem=self.repo[nexttree.id] # Retrieve the tree from the repository using its ID
+	# 			if isinstance(nexttreeitem,pygit2.Tree):
+	# 				self.debugmsg("Found next tree " + nextitem)
+	# 				return self.get_blob(treelist[1:],nexttreeitem)
+	# 			else:
+	# 				raise MetadataTreeNotFoundError("Could not find metadata with path specified (Tree %s not found)" % nextitem)
+	# 	except KeyError, e:
+	# 		raise MetadataBlobNotFoundError("No metadata found for " + e.message) # Metadata object does not exist yet
 
-	def get_blob(self,treelist,currenttree):
-		nextitem = treelist[0]
+# typedef enum {
+# 	GIT_STATUS_CURRENT = 0,
+#
+# 	GIT_STATUS_INDEX_NEW        = (1u << 0),
+# 	GIT_STATUS_INDEX_MODIFIED   = (1u << 1),
+# 	GIT_STATUS_INDEX_DELETED    = (1u << 2),
+# 	GIT_STATUS_INDEX_RENAMED    = (1u << 3),
+# 	GIT_STATUS_INDEX_TYPECHANGE = (1u << 4),
+#
+# 	GIT_STATUS_WT_NEW           = (1u << 7),
+# 	GIT_STATUS_WT_MODIFIED      = (1u << 8),
+# 	GIT_STATUS_WT_DELETED       = (1u << 9),
+# 	GIT_STATUS_WT_TYPECHANGE    = (1u << 10),
+# 	GIT_STATUS_WT_RENAMED       = (1u << 11),
+# 	GIT_STATUS_WT_UNREADABLE    = (1u << 12),
+#
+# 	GIT_STATUS_IGNORED          = (1u << 14),
+# 	GIT_STATUS_CONFLICTED       = (1u << 15),
+# } git_status_t;
+
+# typedef enum {
+# 	GIT_DELTA_UNMODIFIED = 0,  /**< no changes */
+# 	GIT_DELTA_ADDED = 1,	   /**< entry does not exist in old version */
+# 	GIT_DELTA_DELETED = 2,	   /**< entry does not exist in new version */
+# 	GIT_DELTA_MODIFIED = 3,    /**< entry content changed between old and new */
+# 	GIT_DELTA_RENAMED = 4,     /**< entry was renamed between old and new */
+# 	GIT_DELTA_COPIED = 5,      /**< entry was copied from another old entry */
+# 	GIT_DELTA_IGNORED = 6,     /**< entry is ignored item in workdir */
+# 	GIT_DELTA_UNTRACKED = 7,   /**< entry is untracked item in workdir */
+# 	GIT_DELTA_TYPECHANGE = 8,  /**< type of entry changed between old and new */
+# 	GIT_DELTA_UNREADABLE = 9,  /**< entry is unreadable */
+# 	GIT_DELTA_CONFLICTED = 10, /**< entry in the index is conflicted */
+# } git_delta_t;
+
+
+	def get_data_path(self,path):
+		datapath = os.sep.join([path,Metadata.data_hash])
+		if os.path.isabs(datapath):
+			datapath=datapath[1:]
+		self.debugmsg("data path = " + datapath)
+		return datapath
+
+	def get_metadata_blob_path(self,path,streamname):
+		metadatablobpath = os.sep.join([path, Metadata.metadata_hash, streamname])
+		if os.path.isabs(metadatablobpath):
+			metadatablobpath=metadatablobpath[1:]
+		self.debugmsg("metadata blob path = " + metadatablobpath)
+		return metadatablobpath
+
+	def get_metadata_blob(self,path,streamname):
+		metadatablobpath = self.get_metadata_blob_path(path,streamname)
+
+		# Try to get the blob
 		try:
-			if len(treelist)==1:
-				if len(nextitem)==0:
-					raise MetadataRequestError("The request was not valid - check the stream name")
-				metadata=currenttree[nextitem]
-				metadatablob=self.repo[metadata.id]
-				if not isinstance(metadatablob,pygit2.Blob):
-					raise MetadataBlobNotFoundError("Could not find metadata blob in the tree")
-				return MetadataBlob(metadatablob,nextitem,currenttree)
-			else:									# We are not in the right tree so move onto the next tree
-				nexttree=currenttree[nextitem]      # Find the sub-tree in the current tree
-				nexttreeitem=self.repo[nexttree.id] # Retrieve the tree from the repository using its ID
-				if isinstance(nexttreeitem,pygit2.Tree):
-					self.debugmsg("Found next tree " + nextitem)
-					return self.get_blob(treelist[1:],nexttreeitem)
-				else:
-					raise MetadataTreeNotFoundError("Could not find metadata with path specified (Tree %s not found)" % nextitem)
-		except KeyError, e:
-			raise MetadataBlobNotFoundError("No metadata found for " + e.message) # Metadata object does not exist yet
+			metadatablob = self.repo.revparse_single("%s:%s" % (self.branch.name,metadatablobpath))
+			if not isinstance(metadatablob,pygit2.Blob):
+				raise MetadataBlobNotFoundError("Could not find metadata blob in the tree")
+		except KeyError,e:
+			raise MetadataBlobNotFoundError("Could not find metadata blob in the tree")
 
-	def get_metadata_blob(self,path):
-		parentspath = self.get_metadata_blob_path(path,self.streamname)
-		parentslist = parentspath.split(os.sep)
-		return self.get_blob(parentslist,self.commit.tree)
+		# Try to get the data
+		try:
+			datapath = self.get_data_path(path)
+			dataitem = self.repo.revparse_single("%s:%s" % (self.branch.name,datapath))
 
-	def write_tree_hierarchy(self,parentslist,newentryid):
+			# Is it a tree or blob?
+			if isinstance(dataitem,pygit2.Tree):
+				datachanged = pygit2.GIT_STATUS_CURRENT > 0
+			elif isinstance(dataitem,pygit2.Blob):
+				f = open(path, 'r')
+				diff = dataitem.diff_to_buffer(f.read()) # Returns a Diff
+				f.close()
+
+				delta = diff.delta # Get the Delta object
+				datachanged = delta.status > 0
+			else:
+				dataitem = None
+				datachanged = False
+		except KeyError:
+			dataitem = None
+			datachanged = False
+
+		# Try to find matching data file
+		# try:
+		# 	datablobstatus = self.repo.status_file("file.txt")
+		# 	print "data blob status: %d" % datablobstatus
+		# except KeyError:
+		# 	raise MatchingDataBlobNotFoundError
+
+		return MetadataContainer(metadatablob,dataitem,datachanged)
+		# return self.get_blob(parentslist,self.commit.tree)
+
+	def write_tree_hierarchy(self,parentslist,newentryid,force=False):
 		newentry = self.repo[newentryid]
 
 		# Get last entry as name of tree to save (work backwards in tree list)
@@ -153,7 +262,11 @@ class Metadata:
 				# Found existing tree so modify it
 				treebuilder = self.repo.TreeBuilder(tree)
 			else:
-				raise Exception("Expected Tree, got " + str(type(tree)))
+				if force:
+					# Create new tree
+					treebuilder = self.repo.TreeBuilder()
+				else:
+					raise Exception("Expected Tree, got " + str(type(tree)))
 
 		except KeyError:
 			# Tree doesn't exist so create a new one
@@ -172,29 +285,23 @@ class Metadata:
 
 		treebuilderid = treebuilder.write()
 
-		self.debugmsg("Tree saved as " + treebuilderid.__str__())
+		self.debugmsg("Tree containing %s saved with ID %s" % (newentryname, treebuilderid.__str__()))
 
+		# If we're on the last one, len(parentslist) will be 1
 		if len(parentslist) > 1:
 			# Recurse up the tree, pass modified tree to next call of function
-			return self.write_tree_hierarchy(parentslist[0:-1],treebuilderid)
+			return self.write_tree_hierarchy(parentslist[0:-1],treebuilderid,force)
 		else:
 			return treebuilderid
 
-	def get_metadata_blob_path(self,path,streamname):
-		parentspath = os.sep.join([path, Metadata.metadata_hash, streamname])
-		if os.path.isabs(parentspath):
-			parentspath=parentspath[1:]
-		self.debugmsg("parentspath = " + parentspath)
-		return parentspath
-
-	def save_file(self,newfile,path):
+	def save_metadata_blob(self,newfile,path,streamname,force=False):
 		# Save the object into the repository
 		newblobid = self.repo.create_blob(newfile)
 
 		# Save metadata tree
-		parentspath = self.get_metadata_blob_path(path,self.streamname)
+		parentspath = self.get_metadata_blob_path(path,streamname)
 		parentslist = parentspath.split(os.sep)
-		toptreeid = self.write_tree_hierarchy(parentslist, newblobid)
+		toptreeid = self.write_tree_hierarchy(parentslist, newblobid,force)
 
 		# Create a commit
 		commitid = self.repo.create_commit(self.branch.name,
@@ -203,6 +310,7 @@ class Metadata:
 			"Updated metadata for " + path,
 			toptreeid,
 			[self.commit.id])
+
 		# Update the branch's reference to point to the commit
 		# self.branchref.set_target(commitid,pygit2.Signature('Mark', 'cms4@soton.ac.uk'), "Updated metadata")
 
@@ -210,34 +318,8 @@ class Metadata:
 
 		return commitid
 
-	def save_metadata(self,jsondict,path):
-
-		# Create an object to save in the repository
-		newfile = json.dumps(jsondict)
-
-		commitid = self.save_file(newfile,path)
-
-	def get_repo_path(self,abs_req_path,storeonly):
-		if os.path.exists(abs_req_path):
-			# Requested path exists. Will use requested path as place to start looking for repository
-			repo_start_path=abs_req_path
-		elif storeonly:
-			# Path does not exist, but have been asked to look in store
-			# Will try to find a store in parent directory of requested file
-			repo_start_path=os.path.dirname(abs_req_path)
-		else:
-			# Path does not exist so we will not proceed any further
-			raise MatchingDataNotFoundError("Matching data file does not exist in folder")
-
-		try:
-			repo_path = os.path.abspath(pygit2.discover_repository(repo_start_path))
-		except KeyError:
-			raise NoRepositoryError("Could not find a Git repository")
-
-		return repo_path
-
 	def check_path_request(self,path):
-		# Work out the path for the metadata request
+		"""Work out the path for the metadata request"""
 
 		# If no path was specified, use the default for the repository object
 		if path is None:
@@ -249,25 +331,28 @@ class Metadata:
 
 		return path
 
-	def print_metadata(self,fileaction,path=None,keyfilter=None,valuefilter=None):
-
+	def print_metadata(self,fileaction,streamname,path=None,keyfilter=None,valuefilter=None):
 		path=self.check_path_request(path)
 
 		# Get the metadata
-		metadata_blob = self.get_metadata_blob(path)
-
-		gitblob = metadata_blob.metadataitem
+		metadata_container = self.get_metadata_blob(path,streamname)
 
 		if FileActions.is_action(fileaction,FileActions.json):
 			try:
-				self.printjson(gitblob,keyfilter,valuefilter)
+				self.printjson(metadata_container.metadatablob,keyfilter,valuefilter)
 			except ValueError:
 				if FileActions.is_action(fileaction,FileActions.dump):
-					self.dumpfile(gitblob)
+					self.dumpfile(metadata_container.metadatablob)
 				else:
 					raise MetadataFileFormatError("Not JSON data. Use --dump to show file anyway.")
 		elif FileActions.is_action(fileaction,FileActions.dump):
-			self.dumpfile(gitblob)
+			self.dumpfile(metadata_container.metadatablob)
+
+		if metadata_container.datablob is None:
+			print TextColor.Red + 'NOTE: Matching data not found' + TextColor.Reset
+
+		if metadata_container.datachanged:
+			print TextColor.Red + "NOTE: Data has been modified" + TextColor.Reset
 
 	def printjson(self,gitblob,keyfilter=None,valuefilter=None):
 		data = json.loads(gitblob.data)
@@ -278,17 +363,23 @@ class Metadata:
 	def dumpfile(self,gitblob):
 		print gitblob.data
 
-	def update_metadata(self,k,v,path=None):
+	def update_metadata(self,k,v,streamname,path=None,force=False):
 
 		path=self.check_path_request(path)
 
 		try:
 			# Get the metadata
-			blob = self.get_metadata_blob(path)
-			gitblob = blob.metadataitem
-			blobdata = json.loads(gitblob.data)
+			metadatablob = self.get_metadata_blob(path,streamname)
+			jsondict = json.loads(metadatablob.data)
 		except (MetadataBlobNotFoundError, MetadataTreeNotFoundError):
-			blobdata = json.loads("{}")
+			jsondict = json.loads("{}")
 
-		blobdata[k] = v
-		self.save_metadata(blobdata,path)
+		# Update dictionary
+		jsondict[k] = v
+
+		# Create an object to save in the repository
+		newfile = json.dumps(jsondict)
+
+		commitid = self.save_metadata_blob(newfile,path,streamname,force)
+
+		# self.save_metadata(blobdata,path)

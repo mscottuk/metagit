@@ -81,17 +81,17 @@ def parse_args():
 						action=ParsePathAction,
 						help="%s The path to the metadata object. The default branch and stream will be used if not specified." % ParsePathAction.syntax)
 
+	parser_set.add_argument('--force',
+						action='store_true',
+						default=False,
+						help="Force any overwrites")
+
 	# Set up 'get' subparser
 	parser_get.add_argument('path',
 						nargs="?",
 						default=ParsePathAction.path_default,
 						action=ParsePathAction,
 						help="%s The path to the metadata object. The default branch and stream will be used if not specified." % ParsePathAction.syntax)
-
-	parser_get.add_argument('--storeonly',
-						action='store_true',
-						default=False,
-						help="The file specified only exists in the metadata store and does not have a matching file in the filesystem")
 
 	parser_get.add_argument('--key',
 						help="The key to lookup")
@@ -125,12 +125,8 @@ def parse_args():
 
 
 def get(args):
-	try:
-		repo = Metadata(args.metadatapath, args.branchname, args.streamname, args.storeonly, args.verbose)
-		repo.print_metadata(args.fileaction,keyfilter=args.key,valuefilter=args.value)
-	except MatchingDataNotFoundError, e:
-		# Change the error message to include --storeonly argument
-		raise MatchingDataNotFoundError(e.message + ". Please use --storeonly to check in metadata store anyway.")
+	repo = Metadata(args.metadatapath, args.branchname, args.verbose)
+	repo.print_metadata(args.fileaction,args.streamname,keyfilter=args.key,valuefilter=args.value)
 
 def set(args):
 	# Separate the key and value
@@ -140,9 +136,9 @@ def set(args):
 	if sep != "=":
 		raise KeyValuePairArgumentError(KeyValuePairArgumentError.__doc__)
 
-	repo = Metadata(args.metadatapath, args.branchname, args.streamname, storeonly=False, debug=args.verbose)
+	repo = Metadata(args.metadatapath, args.branchname, args.verbose)
 
-	repo.update_metadata(k,v)
+	repo.update_metadata(k,v,args.streamname,force=args.force)
 
 if __name__ == "__main__":
 
