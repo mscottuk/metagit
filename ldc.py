@@ -11,6 +11,10 @@ class NoMetadataBranchError(Exception):
 	"""Could not find a metadata branch in the repository"""
 	pass
 
+class NoDataError(Exception):
+	"""Could not find matching data"""
+	pass
+
 class MetadataBlobNotFoundError(Exception):
 	"""Could not find metadata blob in the tree"""
 	pass
@@ -67,10 +71,9 @@ class Metadata:
 	data_hash = hashlib.sha224('data').hexdigest()
 	metadata_hash = hashlib.sha224('metadata').hexdigest()
 
-	def __init__(self, req_path, branchname, debug):
+	def __init__(self, datarev, req_path, debug):
 
 		# Save miscellaneous arguments
-		self.branchname = branchname
 		self.debug = debug
 
 		# Sort out paths
@@ -89,8 +92,9 @@ class Metadata:
 		self.debugmsg ("Abs=" + self.abs_req_path)
 		self.debugmsg ("Rel="+ self.rel_req_path)
 
-		# Find metadata branch
-		self.find_metadata_branch()
+		self.datarev = datarev
+		self.datarootcommit = self.find_data_commit(datarev)
+
 
 	def debugmsg(self,msg):
 		if self.debug:
@@ -117,18 +121,51 @@ class Metadata:
 		else:
 			raise NoRepositoryError("Could not find a Git repository")
 
-	def find_metadata_branch(self):
-		# Find metadata branch
-		self.branch = self.repo.lookup_branch(self.branchname)
+	def find_data_commit(self,datarev):
+		try:
+			commit = self.repo.revparse_single(datarev)
+			if not isinstance(commit,pygit2.Commit):
+				raise NoDataError("Could not find matching data " + datarev)
+			else:
+				return commit
+		except KeyError:
+			raise NoDataError("Could not find matching data " + datarev)
 
-		if self.branch is None:
+	def find_metadata_commit(self,branchname):
+		# Find metadata branch
+		branch = self.repo.lookup_branch(branchname)
+
+		if branch is None:
 			raise NoMetadataBranchError("Could not find metadata branch in the repository")
 
 		# Find commit in metadata branch
-		self.commit = self.branch.get_object()
+		commit = branch.get_object()
 
-		if not isinstance(self.commit,pygit2.Commit):
+		if not isinstance(commit,pygit2.Commit):
 			raise NoMetadataBranchError("Could not find metadata branch with commit in the repository")
+		else:
+			return commit
+
+	def find_latest_commitid_in_metadata(self,branchname,datacommit):
+		try:
+			self.debugmsg("branchname: %s, datacommit.id %s" % (branchname,datacommit.id))
+			metadatatree = self.repo.revparse_single("%s:%s" % (branchname,datacommit.id))
+
+			if not isinstance(metadatatree,pygit2.Tree):
+				raise MetadataTreeNotFoundError("Could not find matching metadata tree")
+			else:
+				return datacommit.id
+
+		except KeyError:
+			if len(datacommit.parent_ids)==1:
+				datacommit=self.find_data_commit(datacommit.parent_ids[0].__str__())
+				return self.find_latest_commitid_in_metadata(branchname,datacommit)
+			elif len(datacommit.parent_ids)>1:
+				raise MetadataTreeNotFoundError("Merges not supported")
+			else:
+				raise MetadataTreeNotFoundError("Could not find matching metadata tree")
+
+
 
 	# def get_blob(self,treelist,currenttree):
 	# 	nextitem = treelist[0]
@@ -187,26 +224,33 @@ class Metadata:
 # } git_delta_t;
 
 
-	def get_data_path(self,path):
-		datapath = os.sep.join([path,Metadata.data_hash])
-		if os.path.isabs(datapath):
-			datapath=datapath[1:]
+	def get_data_path_in_metadata(self,branchname,path):
+		metadatadatacommitid = self.find_latest_commitid_in_metadata(branchname,self.datarootcommit)
+		datapath = os.path.join(metadatadatacommitid,path,Metadata.data_hash)
 		self.debugmsg("data path = " + datapath)
 		return datapath
 
-	def get_metadata_blob_path(self,path,streamname):
-		metadatablobpath = os.sep.join([path, Metadata.metadata_hash, streamname])
-		if os.path.isabs(metadatablobpath):
-			metadatablobpath=metadatablobpath[1:]
+	def get_metadata_blob_path(self,branchname,path,streamname):
+		metadatadatacommitid = self.find_latest_commitid_in_metadata(branchname,self.datarootcommit)
+		metadatablobpath = os.path.join(metadatadatacommitid.__str__(),path,Metadata.metadata_hash, streamname)
 		self.debugmsg("metadata blob path = " + metadatablobpath)
 		return metadatablobpath
 
-	def get_metadata_blob(self,path,streamname):
-		metadatablobpath = self.get_metadata_blob_path(path,streamname)
+	def get_new_metadata_blob_path(self,path,streamname):
+		metadatablobpath = os.path.join(self.datarootcommit.id.__str__(),path,Metadata.metadata_hash, streamname)
+		self.debugmsg("new metadata blob path = " + metadatablobpath)
+		return metadatablobpath
+
+	def get_metadata_blob(self,branchname,path,streamname):
+		# Find metadata branch
+		# metaadatarootcommit = self.find_metadata_commit(branchname)
+		# self.metadatatree = self.find_metadata_tree(branchname,self.datacommit)
+
+		metadatablobpath = self.get_metadata_blob_path(branchname,path,streamname)
 
 		# Try to get the blob
 		try:
-			metadatablob = self.repo.revparse_single("%s:%s" % (self.branch.name,metadatablobpath))
+			metadatablob = self.repo.revparse_single("%s:%s" % (branchname,metadatablobpath))
 			if not isinstance(metadatablob,pygit2.Blob):
 				raise MetadataBlobNotFoundError("Could not find metadata blob in the tree")
 		except KeyError,e:
@@ -214,8 +258,7 @@ class Metadata:
 
 		# Try to get the data
 		try:
-			datapath = self.get_data_path(path)
-			dataitem = self.repo.revparse_single("%s:%s" % (self.branch.name,datapath))
+			dataitem = self.repo.revparse_single("%s:%s" % (self.datarev,path))
 
 			# Is it a tree or blob?
 			if isinstance(dataitem,pygit2.Tree):
@@ -244,7 +287,7 @@ class Metadata:
 		return MetadataContainer(metadatablob,dataitem,datachanged)
 		# return self.get_blob(parentslist,self.commit.tree)
 
-	def write_tree_hierarchy(self,parentslist,newentryid,force=False):
+	def write_tree_hierarchy(self,parentslist,branchname,newentryid,ismetadatatree=True,force=False):
 		newentry = self.repo[newentryid]
 
 		# Get last entry as name of tree to save (work backwards in tree list)
@@ -252,12 +295,12 @@ class Metadata:
 
 		# Use remaining entries as the parent tree's path
 		# Python does the right thing here for most strings and lists so no need to check the length of parentslist
-		metadatapath = os.sep.join(parentslist[0:-1])
+		newentryparentpath = os.sep.join(parentslist[0:-1])
 
-		self.debugmsg("Looking for " + metadatapath + newentryname)
+		self.debugmsg("Looking for %s/%s" % (newentryparentpath , newentryname))
 
 		try:
-			tree = self.repo.revparse_single('{0}:{1}'.format(self.branch.name,metadatapath))
+			tree = self.repo.revparse_single('{0}:{1}'.format(branchname,newentryparentpath))
 			if isinstance(tree,pygit2.Tree):
 				# Found existing tree so modify it
 				treebuilder = self.repo.TreeBuilder(tree)
@@ -271,6 +314,13 @@ class Metadata:
 		except KeyError:
 			# Tree doesn't exist so create a new one
 			treebuilder = self.repo.TreeBuilder()
+
+		# if ismetadatatree:
+		# 	dataentry = None
+		# else:
+		# 	try:
+		# 		dataentry = self.repo.revparse_single("HEAD:")
+
 
 		if isinstance(newentry, pygit2.Blob):
 			print "Writing blob"
@@ -290,26 +340,38 @@ class Metadata:
 		# If we're on the last one, len(parentslist) will be 1
 		if len(parentslist) > 1:
 			# Recurse up the tree, pass modified tree to next call of function
-			return self.write_tree_hierarchy(parentslist[0:-1],treebuilderid,force)
+			return self.write_tree_hierarchy(parentslist[0:-1],branchname,treebuilderid,ismetadatatree,force)
 		else:
 			return treebuilderid
 
-	def save_metadata_blob(self,newfile,path,streamname,force=False):
+	def save_metadata_blob(self,newfile,branchname,path,streamname,force=False):
+		try:
+			currentmetadatacommit = self.find_metadata_commit(branchname)
+			branch = self.repo.lookup_branch(branchname)
+			branchref = branch.name
+			commitparentids = [currentmetadatacommit.id]
+		except NoMetadataBranchError:
+			commitparentids = [ ]
+			branchref = 'refs/heads/%s' % branchname
+
+		print commitparentids.__str__()
+
 		# Save the object into the repository
 		newblobid = self.repo.create_blob(newfile)
 
 		# Save metadata tree
-		parentspath = self.get_metadata_blob_path(path,streamname)
+		parentspath = self.get_new_metadata_blob_path(path,streamname)
 		parentslist = parentspath.split(os.sep)
-		toptreeid = self.write_tree_hierarchy(parentslist, newblobid,force)
+		toptreeid = self.write_tree_hierarchy(parentslist, branchname, newblobid, ismetadatatree=True, force=force)
 
+		# print "Create for %s, %s, %s, %s" % (branchname,path,toptreeid,commitparentids)
 		# Create a commit
-		commitid = self.repo.create_commit(self.branch.name,
+		commitid = self.repo.create_commit(branchref,
 			pygit2.Signature('Mark', 'cms4@soton.ac.uk'),
 			pygit2.Signature('Mark', 'cms4@soton.ac.uk'),
 			"Updated metadata for " + path,
 			toptreeid,
-			[self.commit.id])
+			commitparentids)
 
 		# Update the branch's reference to point to the commit
 		# self.branchref.set_target(commitid,pygit2.Signature('Mark', 'cms4@soton.ac.uk'), "Updated metadata")
@@ -331,11 +393,11 @@ class Metadata:
 
 		return path
 
-	def print_metadata(self,fileaction,streamname,path=None,keyfilter=None,valuefilter=None):
+	def print_metadata(self,fileaction,branchname,streamname,path=None,keyfilter=None,valuefilter=None):
 		path=self.check_path_request(path)
 
 		# Get the metadata
-		metadata_container = self.get_metadata_blob(path,streamname)
+		metadata_container = self.get_metadata_blob(branchname,path,streamname)
 
 		if FileActions.is_action(fileaction,FileActions.json):
 			try:
@@ -363,14 +425,14 @@ class Metadata:
 	def dumpfile(self,gitblob):
 		print gitblob.data
 
-	def update_metadata(self,k,v,streamname,path=None,force=False):
+	def update_metadata(self,k,v,branchname,streamname,path=None,force=False):
 
 		path=self.check_path_request(path)
 
 		try:
 			# Get the metadata
-			metadatablob = self.get_metadata_blob(path,streamname)
-			jsondict = json.loads(metadatablob.data)
+			metadatablob = self.get_metadata_blob(branchname,path,streamname)
+			jsondict = json.loads(metadatablob.metadatablob.data)
 		except (MetadataBlobNotFoundError, MetadataTreeNotFoundError):
 			jsondict = json.loads("{}")
 
@@ -380,6 +442,6 @@ class Metadata:
 		# Create an object to save in the repository
 		newfile = json.dumps(jsondict)
 
-		commitid = self.save_metadata_blob(newfile,path,streamname,force)
+		commitid = self.save_metadata_blob(newfile,branchname,path,streamname,force)
 
 		# self.save_metadata(blobdata,path)

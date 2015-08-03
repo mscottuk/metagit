@@ -61,6 +61,11 @@ def parse_args():
 						default=False,
 						help="Verbose output")
 
+	parser.add_argument('--rev',
+						dest="datarev",
+						default="HEAD",
+						help="The revision for which to view metadata")
+
 	# Add sub-parsers
 	subparsers = parser.add_subparsers()
 
@@ -125,8 +130,8 @@ def parse_args():
 
 
 def get(args):
-	repo = Metadata(args.metadatapath, args.branchname, args.verbose)
-	repo.print_metadata(args.fileaction,args.streamname,keyfilter=args.key,valuefilter=args.value)
+	repo = Metadata(args.datarev, args.metadatapath, args.verbose)
+	repo.print_metadata(args.fileaction,args.branchname,args.streamname,keyfilter=args.key,valuefilter=args.value)
 
 def set(args):
 	# Separate the key and value
@@ -136,9 +141,9 @@ def set(args):
 	if sep != "=":
 		raise KeyValuePairArgumentError(KeyValuePairArgumentError.__doc__)
 
-	repo = Metadata(args.metadatapath, args.branchname, args.verbose)
+	repo = Metadata(args.datarev, args.metadatapath, args.verbose)
 
-	repo.update_metadata(k,v,args.streamname,force=args.force)
+	repo.update_metadata(k,v,args.branchname,args.streamname,force=args.force)
 
 if __name__ == "__main__":
 
