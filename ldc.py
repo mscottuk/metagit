@@ -25,6 +25,11 @@ class MetadataBlobNotFoundError(Exception):
 	pass
 
 
+class DataBlobNotFoundError(Exception):
+	"Could not find data blob in repository"
+	pass
+
+
 class NoDataError(Exception):
 	"""Could not find matching data"""
 	pass
@@ -50,6 +55,11 @@ class ParameterError(Exception):
 	pass
 
 
+class MetadataInvalidError(Exception):
+	"""Metadata does not match request"""  # e.g. An uncommitted file
+	pass
+
+
 class TextColor:
 	Red = '\033[31m'
 	Reset = '\033[0m'
@@ -65,6 +75,11 @@ class FileActions:
 		return action & actioncmp == actioncmp
 
 
+class DataRevisionUpdateMethod:
+	FindAndUpdateEarlierMetadata = 1
+	CreateNewMetadata = 2
+
+
 class MetadataRepository(pygit2.Repository):
 
 	# We're just looking for a
@@ -72,6 +87,7 @@ class MetadataRepository(pygit2.Repository):
 	# metadata_name = hashlib.md5('metadata').hexdigest()
 	data_name = uuid.uuid5(uuid.NAMESPACE_X500, 'data').__str__()
 	metadata_name = uuid.uuid5(uuid.NAMESPACE_X500, 'metadata').__str__()
+	datarev_default_get = "HEAD"
 
 	# We need two things to find the metadata:
 	# 1 - A path to the file
@@ -206,6 +222,71 @@ class MetadataRepository(pygit2.Repository):
 		except KeyError:
 			raise MetadataBlobNotFoundError("Could not find metadata blob in the tree")
 
+	def get_metadata_node(self, streamname, path):
+		# Find metadata branch
+		metaadatacommit = self.find_metadata_commit(self.metadataref)
+
+		# Find path of metadata node
+		metadatanodepath = self.get_metadata_node_path(path, streamname)
+
+		# Retrieve metadata node
+		try:
+			metadatanode = self.revparse_single("%s:%s" % (metaadatacommit.id, metadatanodepath))
+			if not isinstance(metadatanode, pygit2.Tree):
+				raise MetadataBlobNotFoundError("Could not find metadata blob in the tree")
+			else:
+				return metadatanode
+		except KeyError:
+			raise MetadataBlobNotFoundError("Could not find metadata blob in the tree")
+
+	def find_fs_blob_in_repository(self, path):
+		if os.path.isfile(path):
+			requestedblobid = pygit2.hashfile(path)  # Find the ID of the file so we can check if it's in repository
+			if (requestedblobid in self):            # Check if the file is in the repository
+				dataitem = self[requestedblobid]     # We found the file so save it for later
+				return dataitem
+
+		# If we reach here, it is a directory or it was not found on the file system
+		raise DataBlobNotFoundError("Could not find data blob in repository")
+
+	def find_path_in_repository(self, datarev, normpath):
+
+		# Retrieve the item that the user wants us to list metadata for
+		if datarev is None:
+			# User did not specify a revision so we have to look on the file system
+			try:
+				# Without a data revision, we can only lookup a blob in the repository
+				dataitem = self.find_fs_blob_in_repository(normpath)
+				print "* Blob specified has ID of %s" % dataitem.id
+				return dataitem
+			except DataBlobNotFoundError:
+				if os.path.isdir(normpath):
+					# Path is a directory so can't return a repository item
+					print "* Looking for directory %s" % normpath
+					return None
+				else:
+					# Path doesn't exist at all
+					return None
+		else:
+			# We have a data revision so find the data in the repository
+			try:
+				dataitem = self.revparse_single("%s:%s" % (datarev, normpath))
+
+				# Check what the item is (file or directory)
+				if isinstance(dataitem, pygit2.Blob):
+					print "* Looking for metadata for blob %s" % dataitem.id
+					return dataitem
+				elif isinstance(dataitem, pygit2.Tree):
+					print "* Looking for metadata for directory '%s' " % normpath
+					return dataitem
+				else:
+					MetadataRepository.errormsg("Data requested does not exist")
+					return None
+
+			except KeyError:
+				MetadataRepository.errormsg("Data requested does not exist")
+				return None
+
 	def list_metadata_in_stream(self, datarev, streamname, path=None):
 		# Get the path or generate it if not specified
 		path = self.check_path_request(path)
@@ -213,60 +294,16 @@ class MetadataRepository(pygit2.Repository):
 
 		print "\n* Listing metadata for file path: '{}'\n* Data branch specified: '{}'".format(normpath, datarev)
 
-		# Find path of metadata node
-		metadatanodepath = self.get_metadata_node_path(path, streamname)
+		if datarev is not None:
+			dataitemcommit = self.revparse_single("%s" % datarev)
+			dataitemcommitparents = [commit.id.__str__() for commit in self.walk(dataitemcommit.id, pygit2.GIT_SORT_REVERSE)]
+			self.debugmsg("parent commits %s " % dataitemcommitparents)
 
-		# Find metadata branch
-		metaadatacommit = self.find_metadata_commit(self.metadataref)
+		# Retrieve the data item requested
+		dataitemrequested = self.find_path_in_repository(datarev, normpath)
 
-		# Retrieve metadata node
-		try:
-			metadatanode = self.revparse_single("%s:%s" % (metaadatacommit.id, metadatanodepath))
-			if not isinstance(metadatanode, pygit2.Tree):
-				raise MetadataBlobNotFoundError("Could not find metadata blob in the tree")
-		except KeyError:
-			raise MetadataBlobNotFoundError("Could not find metadata blob in the tree")
-
-		# Retrieve the item that the user wants us to list metadata for
-		if datarev is None:
-			if os.path.isfile(path):
-				requesteddataistree = False
-				requestedblobid = pygit2.hashfile(path)
-				if requestedblobid in self:
-					dataitem = self[requestedblobid]
-					requesteddataexists = True
-					print "* Blob specified has ID of %s" % requestedblobid
-				else:
-					requesteddataexists = False
-			elif os.path.isdir(normpath):
-				# set a tree
-				requesteddataistree = True
-				requesteddataexists = True
-				print "* Looking for directory %s" % normpath
-			else:
-				requesteddataexists = False
-		else:
-			try:
-				dataitem = self.revparse_single("%s:%s" % (datarev, path))
-				dataitemcommit = self.revparse_single("%s" % datarev)
-				dataitemcommitparents = [commit.id.__str__() for commit in self.walk(dataitemcommit.id, pygit2.GIT_SORT_REVERSE)]
-				self.debugmsg("parent commits %s " % dataitemcommitparents)
-				requesteddataexists = True
-
-				# Check what the item is (file or directory)
-				if isinstance(dataitem, pygit2.Blob):
-					requesteddataistree = False
-					print "* Looking for metadata for blob %s" % dataitem.id
-				elif isinstance(dataitem, pygit2.Tree):
-					requesteddataistree = True
-					print "* Looking for metadata for directory '%s' " % path
-				else:
-					requesteddataexists = False
-					MetadataRepository.errormsg("Data requested does not exist")
-
-			except KeyError:
-				requesteddataexists = False
-				MetadataRepository.errormsg("Data requested does not exist")
+		# Retrieve metadata node for the given path
+		metadatanode = self.get_metadata_node(streamname, path)
 
 		# Print details of all of the matching metadata (looking up the matching data commit)
 		print
@@ -274,42 +311,116 @@ class MetadataRepository(pygit2.Repository):
 		print outputformatstr.format("Data commit ID containing metadata", "Data in commit", "Data matches", "Inheritable", "Committed")
 		print outputformatstr.format("-------------------------", "--------------", "------------", "-----------", "---------")
 
-		# Iterate around each metadata item defined
-		for metadataentry in metadatanode:
+		# Iterate around each metadata item defined for the given path
+		for datacommitwithmetadataid in [metadataentry.name for metadataentry in metadatanode]:
 
-			# Set some default values
-			dataitemmatchesrequest = False
-			matchingdataidstr = "Matching data could not be found"
-			matchingdatacommitstr = "Matching data could not be found"
-			metadatainheritable = False
+			metadatainheritable = (dataitemrequested is not None) and (datarev is not None) and (datacommitwithmetadataid in dataitemcommitparents)
 
 			# Attempt to find data commit that metadata pertains to
 			try:
-				matchingdatacommitid = metadataentry.name
-				matchingdatacommit = self[matchingdatacommitid]
+				datacommitwithmetadata = self[datacommitwithmetadataid]
 
 				# Attempt to find data item matching path
-				matchingdataitem = self.revparse_single("%s:%s" % (matchingdatacommitid, path))
+				matchingdataitem = self.revparse_single("%s:%s" % (datacommitwithmetadataid, path))
 
-				if requesteddataexists:
-					matchingdatacommitstr = datetime.datetime.fromtimestamp(matchingdatacommit.commit_time)
-					if datarev is not None:
-						metadatainheritable = metadataentry.name in dataitemcommitparents
+				if dataitemrequested is None:
+					datacommitwithmetadatastr = "Matching data could not be found"
+					dataitemmatchesrequest = False
+					matchingdataidstr = "Matching data could not be found"
+				else:
+					datacommitwithmetadatastr = datetime.datetime.fromtimestamp(datacommitwithmetadata.commit_time)
 
-					if requesteddataistree:
+					if isinstance(dataitemrequested, pygit2.Tree):
 						dataitemmatchesrequest = isinstance(matchingdataitem, pygit2.Tree)
 						matchingdataidstr = path
 					else:
-						dataitemmatchesrequest = (matchingdataitem.id == dataitem.id)
+						dataitemmatchesrequest = (matchingdataitem.id == dataitemrequested.id)
 						matchingdataidstr = matchingdataitem.id
 
 			except KeyError:
-				pass
+				# Data could not be found
+				datacommitwithmetadatastr = "Matching data could not be found"
+				matchingdataidstr = "Matching data could not be found"
+				dataitemmatchesrequest = False
 
 			matchingdatastr = ("YES" if dataitemmatchesrequest else "NO")
 			metadatainheritablestr = ("YES" if metadatainheritable else "NO")
 
-			print outputformatstr.format(matchingdatacommitid, matchingdataidstr, matchingdatastr, metadatainheritablestr, matchingdatacommitstr)
+			print outputformatstr.format(datacommitwithmetadataid, matchingdataidstr, matchingdatastr, metadatainheritablestr, datacommitwithmetadatastr)
+
+		# PREVIOUS MORE COMPLICATED WORKING VERSION
+		# ----- BLOCK 1: ----
+		# # Retrieve the item that the user wants us to list metadata for
+		# if datarev is None:  # User did not specify a revision so we have to look on the file system
+		# 	if os.path.isfile(normpath):
+		# 		requesteddataistree = False
+		# 		requestedblobid = pygit2.hashfile(path)          # Find the ID of the file so we can check if it's in repository
+		# 		requesteddataexists = (requestedblobid in self)  # Check if the file is in the repository
+		# 		if requesteddataexists:
+		# 			dataitem = self[requestedblobid]             # We found the file so save it for later
+		# 			print "* Blob specified has ID of %s" % requestedblobid
+		# 	elif os.path.isdir(normpath):
+		# 		# set a tree
+		# 		requesteddataistree = True
+		# 		requesteddataexists = True
+		# 		print "* Looking for directory %s" % normpath
+		# 	else:
+		# 		requesteddataexists = False
+		# else:  # We have a data revision so find the data in the repository
+		# 	try:
+		# 		dataitem = self.revparse_single("%s:%s" % (datarev, path))
+		# 		dataitemcommit = self.revparse_single("%s" % datarev)
+		# 		dataitemcommitparents = [commit.id.__str__() for commit in self.walk(dataitemcommit.id, pygit2.GIT_SORT_REVERSE)]
+		# 		self.debugmsg("parent commits %s " % dataitemcommitparents)
+		# 		requesteddataexists = True
+		#
+		# 		# Check what the item is (file or directory)
+		# 		if isinstance(dataitem, pygit2.Blob):
+		# 			requesteddataistree = False
+		# 			print "* Looking for metadata for blob %s" % dataitem.id
+		# 		elif isinstance(dataitem, pygit2.Tree):
+		# 			requesteddataistree = True
+		# 			print "* Looking for metadata for directory '%s' " % path
+		# 		else:
+		# 			requesteddataexists = False
+		# 			MetadataRepository.errormsg("Data requested does not exist")
+		#
+		# 	except KeyError:
+		# 		requesteddataexists = False
+		# 		MetadataRepository.errormsg("Data requested does not exist")
+		# ------- BLOCK 2: ------
+		# for matchingdatacommitid in [metadataentry.name for metadataentry in metadatanode]:
+		#
+		# 	# Set some default values
+		# 	dataitemmatchesrequest = False
+		# 	matchingdataidstr = "Matching data could not be found"
+		# 	matchingdatacommitstr = "Matching data could not be found"
+		# 	metadatainheritable = requesteddataexists and (datarev is not None) and (matchingdatacommitid in dataitemcommitparents)
+		# 	metadatainheritablestr = ("YES" if metadatainheritable else "NO")
+		#
+		# 	# Attempt to find data commit that metadata pertains to
+		# 	try:
+		# 		matchingdatacommit = self[matchingdatacommitid]
+		#
+		# 		# Attempt to find data item matching path
+		# 		matchingdataitem = self.revparse_single("%s:%s" % (matchingdatacommitid, path))
+		#
+		# 		if requesteddataexists:
+		# 			matchingdatacommitstr = datetime.datetime.fromtimestamp(matchingdatacommit.commit_time)
+		#
+		# 			if requesteddataistree:
+		# 				dataitemmatchesrequest = isinstance(matchingdataitem, pygit2.Tree)
+		# 				matchingdataidstr = path
+		# 			else:
+		# 				dataitemmatchesrequest = (matchingdataitem.id == dataitem.id)
+		# 				matchingdataidstr = matchingdataitem.id
+		#
+		# 	except KeyError:
+		# 		pass
+		#
+		# 	matchingdatastr = ("YES" if dataitemmatchesrequest else "NO")
+		#
+		# 	print outputformatstr.format(matchingdatacommitid, matchingdataidstr, matchingdatastr, metadatainheritablestr, matchingdatacommitstr)
 
 	def write_tree_hierarchy(self, parentslist, newentryid, force=False):
 		newentry = self[newentryid]
@@ -507,13 +618,55 @@ class MetadataRepository(pygit2.Repository):
 
 		return datacommitwithobject
 
-	def update_metadata(self, k, v, streamname, datarev, path=None, force=False):
+	def update_metadata(self, k, v, streamname, datarev, datarevupdatemethod, path=None, force=False):
 		path = self.check_path_request(path)
+		normpath = os.path.normpath(path)
 
-		# Get the data commit
-		datacommitwithobject = self.find_data_commit_with_object(datarev, path)
+		# Check the data revision supplied.
+		# If the user specified None, we need to find the latest metadata for this path and ensure the
+		# data hash matches (otherwise it's not committed).
+		# What happens if it is a new version of the file that has been committed but has no metadata yet?
+		# ...we don't know wheter to update earlier commit or update specified commit.
+		# ---> So, a set command must always specify the behaviour otherwise unexpected things might happen.
+		if datarev is None:
+			if os.path.isfile(normpath):
+				# Check what the status of the file is
+				status = self.status_file(path)
+
+				if status > pygit2.GIT_STATUS_CURRENT:
+					MetadataRepository.errormsg("ERROR: File has been modified but not committed so this metadata is not valid. Use '{}:{}' syntax to see metadata.".format(datarev, path))
+					raise MetadataInvalidError("File has been modified but not committed so this metadata is not valid.")
+			elif os.path.isdir(normpath):
+				try:
+					expectedtree = self.revparse_single('HEAD:%s' % path)
+					if not isinstance(expectedtree, pygit2.Tree):
+						MetadataRepository.errormsg("ERROR: Path does not exist and data revision not specified.")
+						raise ParameterError("Path does not exist and data revision not specified")
+				except KeyError:
+					MetadataRepository.errormsg("ERROR: Path does not exist and data revision not specified.")
+					raise ParameterError("Path does not exist and data revision not specified")
+			else:
+				MetadataRepository.errormsg("ERROR: Path does not exist and data revision not specified.")
+				raise ParameterError("Path does not exist and data revision not specified")
+
+			# If we get here then the file or folder exists in the HEAD commit
+			datarev = 'HEAD'
+			MetadataRepository.errormsg("NOTE: Data revision not specified. Assuming '{}'.".format(datarev))
+
+		# Find the data commit
+		if datarevupdatemethod == DataRevisionUpdateMethod.FindAndUpdateEarlierMetadata:
+			datacommitwithobject = self.find_data_commit_with_object(datarev, path)
+		elif datarevupdatemethod == DataRevisionUpdateMethod.CreateNewMetadata:
+			datacommitwithobject = self.find_data_commit(datarev)
+		else:
+			raise ParameterError("Data revision update method required")
 
 		datacommitwithobjectid = datacommitwithobject.id.__str__()
+
+		MetadataRepository.errormsg("'{}' has been found in data commit {}".format(path, datacommitwithobjectid))
+		metadatablobpath = self.get_metadata_blob_path(path, streamname, datacommitwithobjectid)
+		MetadataRepository.errormsg("Metadata will be updated at path %s" % metadatablobpath)
+		return
 
 		try:
 			# Get the metadata
@@ -532,6 +685,26 @@ class MetadataRepository(pygit2.Repository):
 
 	def print_metadata(self, streamname, datarev, path=None, fileaction=FileActions.dump, keyfilter=None, valuefilter=None):
 		path = self.check_path_request(path)
+
+		# Please note that if we set the datarev to the new default of HEAD, to know whether
+		# data has changed between the metadata's commit, we need to know the
+		# requested data and the metadata's actual data commit. For example, if the user specified None:file1
+		# then we will look up metadata in HEAD:file1.txt, we will need to check whether file1.txt
+		# has changed in the working directory because the user did not explicitly specify HEAD:file1.txt.
+		# However, if the user did specify HEAD:file1.txt we can then lookup the metadata for that
+		# version of the file.
+
+		if datarev is None:
+			# Assume HEAD
+			datarev = self.datarev_default_get
+			MetadataRepository.errormsg("NOTE: Data revision not specified. Assuming '{}'.".format(datarev))
+
+			# Check what the status of the file is
+			status = self.status_file(path)
+
+			if status > pygit2.GIT_STATUS_CURRENT:
+				MetadataRepository.errormsg("ERROR: File has been modified but not committed so this metadata is not valid. Use '{}:{}' syntax to see metadata.".format(datarev, path))
+				raise MetadataInvalidError("File has been modified but not committed so this metadata is not valid.")
 
 		# Get the data commit
 		datacommitwithobject = self.find_data_commit_with_object(datarev, path)

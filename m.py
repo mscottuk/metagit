@@ -6,7 +6,7 @@ import json
 import argparse
 from ldc import *
 import traceback
-import re # Regular expressions
+import re  # Regular expressions
 
 
 # 1) Get Git repo, specifying branch to use for metadata
@@ -58,6 +58,7 @@ import re # Regular expressions
 
 class ParsePathAndStream(argparse.Action):
 	datarev_default = None
+	datarev_default_get = "HEAD"
 	stream_default = "metadata"
 	path_default = os.getcwd()
 	syntax = "datarev:metadatapath[:stream]"
@@ -135,26 +136,43 @@ class ParseMetadataRef(argparse.Action):
 
 		setattr(namespace, self.dest, metadataref)
 
+
+class ParseUpdateMethod(argparse.Action):
+
+	def __call__(self, parser, namespace, values, option_string=None):
+
+		# Check if we have an absolute reference path passed
+		if values == "searchback":
+			setattr(namespace, self.dest, DataRevisionUpdateMethod.FindAndUpdateEarlierMetadata)
+		elif values == "nosearchback":
+			# We don't have one so generate it
+			setattr(namespace, self.dest, DataRevisionUpdateMethod.CreateNewMetadata)
+		else:
+			parser.error("Please specify 'searchback' or 'nosearchback'")
+
+
 def parse_args():
 	# Create command line parser
 	parser = argparse.ArgumentParser(description='Manipulate a dataset\'s metadata')
 
 	# Add top level arguments
-	parser.add_argument('-v', '--verbose',
-						action='store_true',
-						default=False,
-						help="Verbose output")
+	parser.add_argument(
+		'-v', '--verbose',
+		action='store_true',
+		default=False,
+		help="Verbose output")
 
 	# parser.add_argument('--rev',
 	# 					dest="datarev",
 	# 					default="HEAD",
 	# 					help="The revision for which to view metadata")
 
-	parser.add_argument('-m', '--metadataref',
-						dest='metadataref',
-						action=ParseMetadataRef,
-						default = ParseMetadataRef.metadataref_default,
-						help="A git reference to the metadata, e.g. 'metadata' or 'refs/heads/metadata'")
+	parser.add_argument(
+		'-m', '--metadataref',
+		dest='metadataref',
+		action=ParseMetadataRef,
+		default=ParseMetadataRef.metadataref_default,
+		help="A git reference to the metadata, e.g. 'metadata' or 'refs/heads/metadata'")
 
 	# parser_group = parser.add_mutually_exclusive_group(required=True)
 	#
@@ -185,36 +203,40 @@ def parse_args():
 	parser_list.set_defaults(command=list)
 
 	# Set up 'get' subparser
-	parser_get.add_argument('path',
-						nargs="?",
-						default=ParsePathAndStream.path_default,
-						action=ParsePathAndStream,
-						help="%s The path to the metadata object. The default branch and stream will be used if not specified." % ParsePathAndStream.syntax)
+	parser_get.add_argument(
+		'path',
+		nargs="?",
+		default=ParsePathAndStream.path_default,
+		action=ParsePathAndStream,
+		help="%s The path to the metadata object. The default branch and stream will be used if not specified." % ParsePathAndStream.syntax)
 
 	# parser_get.add_argument('-d', '--datarev',
 	# 					dest='datarev',
 	# 					default="HEAD",
 	# 					help='The revision for which to view metadata')
 
-	parser_get.add_argument('--key',
-						help="The key to lookup")
+	parser_get.add_argument(
+		'--key',
+		help="The key to lookup")
 
-	parser_get.add_argument('--value',
-						help="The value it must have")
-
+	parser_get.add_argument(
+		'--value',
+		help="The value it must have")
 
 	parser_get_group = parser_get.add_mutually_exclusive_group()
-	parser_get_group.add_argument('--dump',
-						dest='fileaction',
-						action='store_const',
-						const=FileActions.dump,
-						help='Do not parse the file in any way, just print it to stdout')
+	parser_get_group.add_argument(
+		'--dump',
+		dest='fileaction',
+		action='store_const',
+		const=FileActions.dump,
+		help='Do not parse the file in any way, just print it to stdout')
 
-	parser_get_group.add_argument('--json',
-						dest='fileaction',
-						action='store_const',
-						const=FileActions.json,
-						help='Parse the file as JSON and prettify the output')
+	parser_get_group.add_argument(
+		'--json',
+		dest='fileaction',
+		action='store_const',
+		const=FileActions.json,
+		help='Parse the file as JSON and prettify the output')
 
 	# Set up 'set' subparser
 	# parser_set.add_argument('-d', '--datarev',
@@ -222,19 +244,28 @@ def parse_args():
 	# 					default=None,
 	# 					help='The revision for which to view metadata')
 
-	parser_set.add_argument('keyvaluepair',
-						help='Key value pair to add to metadata')
+	parser_set.add_argument(
+		'datarevupdatemethod',
+		choices=['searchback', 'nosearchback'],
+		action=ParseUpdateMethod,
+		help="Search back for an earlier version of metadata for this file and update it (searchback) or only update the metadata on the revision specified leaving metadata on previous commits unaltered (nosearchback)")
 
-	parser_set.add_argument('path',
-						nargs="?",
-						default=ParsePathAndStream.path_default,
-						action=ParsePathAndStream,
-						help="%s The path to the metadata object. The default branch and stream will be used if not specified." % ParsePathAndStream.syntax)
+	parser_set.add_argument(
+		'keyvaluepair',
+		help='Key value pair to add to metadata')
 
-	parser_set.add_argument('--force',
-						action='store_true',
-						default=False,
-						help="Force any overwrites")
+	parser_set.add_argument(
+		'path',
+		nargs="?",
+		default=ParsePathAndStream.path_default,
+		action=ParsePathAndStream,
+		help="%s The path to the metadata object. The default branch and stream will be used if not specified." % ParsePathAndStream.syntax)
+
+	parser_set.add_argument(
+		'--force',
+		action='store_true',
+		default=False,
+		help="Force any overwrites")
 
 	# Set up 'list' subparser
 	# parser_list.add_argument('-d', '--datarev',
@@ -242,11 +273,12 @@ def parse_args():
 	# 					default="HEAD",
 	# 					help='The revision for which to view metadata')
 
-	parser_list.add_argument('path',
-						nargs="?",
-						default=ParsePathAndStream.path_default,
-						action=ParsePathAndStream,
-						help="%s The path to the metadata object. The default branch and stream will be used if not specified." % ParsePathAndStream.syntax)
+	parser_list.add_argument(
+		'path',
+		nargs="?",
+		default=ParsePathAndStream.path_default,
+		action=ParsePathAndStream,
+		help="%s The path to the metadata object. The default branch and stream will be used if not specified." % ParsePathAndStream.syntax)
 
 	args = parser.parse_args()
 
@@ -262,22 +294,12 @@ def parse_args():
 
 
 def get(args):
-	# Check the data revision supplied
-	if args.datarev is None:
-		MetadataRepository.errormsg("\nData revision not supplied. Either specify a specific metadata revision (e.g. HEAD), one of the existing metadata entries for this object (listed below), or the commit this file was added on.\n")
-		list(args)
-		return
 
 	repo = MetadataRepository(args.metadatapath, args.metadataref, debug=args.verbose)
 	repo.print_metadata(args.streamname, args.datarev, fileaction=args.fileaction, keyfilter=args.key, valuefilter=args.value)
 
 
 def set(args):
-	# Check the data revision supplied
-	if args.datarev is None:
-		MetadataRepository.errormsg("\nData revision not supplied. Either specify a specific metadata revision (e.g. HEAD), one of the existing metadata entries for this object (listed below), or the commit this file was added on.\n")
-		list(args)
-		return
 
 	# Separate the key and value
 	k, sep, v = args.keyvaluepair.partition("=")
@@ -287,12 +309,11 @@ def set(args):
 		raise KeyValuePairArgumentError(KeyValuePairArgumentError.__doc__)
 
 	repo = MetadataRepository(args.metadatapath, args.metadataref, debug=args.verbose)
-	repo.update_metadata(k, v, args.streamname, args.datarev, force=args.force)
+	repo.update_metadata(k, v, args.streamname, args.datarev, args.datarevupdatemethod, force=args.force)
 
 
 def list(args):
 	repo = MetadataRepository(args.metadatapath, args.metadataref, debug=args.verbose)
-	print "Metadata exists on the following commits:"
 	repo.list_metadata_in_stream(args.datarev, args.streamname)
 
 
