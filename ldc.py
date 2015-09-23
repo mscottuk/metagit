@@ -75,9 +75,9 @@ class FileActions:
 		return action & actioncmp == actioncmp
 
 
-class DataRevisionUpdateMethod:
-	FindAndUpdateEarlierMetadata = 1
-	CreateNewMetadata = 2
+class DataRevisionMetadataSearchMethod:
+	SearchBackForEarlierMetadataAllowed = 1  # FindAndUpdateEarlierMetadata
+	UseRevisionSpecifiedOnly = 2             # CreateNewMetadata
 
 
 class MetadataRepository(pygit2.Repository):
@@ -292,7 +292,7 @@ class MetadataRepository(pygit2.Repository):
 		path = self.check_path_request(path)
 		normpath = os.path.normpath(path)
 
-		print "\n* Listing metadata for file path: '{}'\n* Data branch specified: '{}'".format(normpath, datarev)
+		print "\n* Listing metadata for file path: '{}'\n* Data branch specified: '{}'\n* Stream specified: {}".format(normpath, datarev, streamname)
 
 		if datarev is not None:
 			dataitemcommit = self.revparse_single("%s" % datarev)
@@ -316,19 +316,18 @@ class MetadataRepository(pygit2.Repository):
 
 			metadatainheritable = (dataitemrequested is not None) and (datarev is not None) and (datacommitwithmetadataid in dataitemcommitparents)
 
-			# Attempt to find data commit that metadata pertains to
 			try:
-				datacommitwithmetadata = self[datacommitwithmetadataid]
-
-				# Attempt to find data item matching path
-				matchingdataitem = self.revparse_single("%s:%s" % (datacommitwithmetadataid, path))
-
 				if dataitemrequested is None:
 					datacommitwithmetadatastr = "Matching data could not be found"
 					dataitemmatchesrequest = False
 					matchingdataidstr = "Matching data could not be found"
 				else:
+					# Attempt to find data commit that metadata pertains to
+					datacommitwithmetadata = self[datacommitwithmetadataid]
 					datacommitwithmetadatastr = datetime.datetime.fromtimestamp(datacommitwithmetadata.commit_time)
+
+					# Attempt to find data item matching path
+					matchingdataitem = self.revparse_single("%s:%s" % (datacommitwithmetadataid, path))
 
 					if isinstance(dataitemrequested, pygit2.Tree):
 						dataitemmatchesrequest = isinstance(matchingdataitem, pygit2.Tree)
@@ -346,6 +345,7 @@ class MetadataRepository(pygit2.Repository):
 			matchingdatastr = ("YES" if dataitemmatchesrequest else "NO")
 			metadatainheritablestr = ("YES" if metadatainheritable else "NO")
 
+			# if datarev is None or (dataitemmatchesrequest and metadatainheritable):
 			print outputformatstr.format(datacommitwithmetadataid, matchingdataidstr, matchingdatastr, metadatainheritablestr, datacommitwithmetadatastr)
 
 	def write_tree_hierarchy(self, parentslist, newentryid, force=False):
@@ -544,45 +544,49 @@ class MetadataRepository(pygit2.Repository):
 
 		return datacommitwithobject
 
+	def generate_datarev(self, path):
+		normpath = os.path.normpath(path)
+		datarev = self.datarev_default_get
+		MetadataRepository.errormsg("NOTE: Data revision not specified. Assuming '{}'.".format(datarev))
+
+		if os.path.isfile(normpath):
+			# Check what the status of the file is
+			status = self.status_file(path)
+
+			if status > pygit2.GIT_STATUS_CURRENT:
+				raise MetadataInvalidError("File has been modified but not committed so this metadata is not valid. Use '{}:{}' syntax to see metadata.".format(datarev, path))
+		elif os.path.isdir(normpath):
+			# Try to find the directory in the revision specified
+			try:
+				expectedtree = self.revparse_single('%s:%s' % (datarev, path))
+				if not isinstance(expectedtree, pygit2.Tree):
+					raise ParameterError("Path does not exist and data revision not specified")
+			except KeyError:
+				raise ParameterError("Path does not exist and data revision not specified")
+		else:
+			# If it wasn't a file or a directory, report an error
+			raise ParameterError("Path does not exist and data revision not specified")
+
+		# If we get here then the file or folder exists in the HEAD commit
+		return datarev
+
 	def update_metadata(self, k, v, streamname, datarev, datarevupdatemethod, path=None, force=False):
 		path = self.check_path_request(path)
-		normpath = os.path.normpath(path)
 
 		# Check the data revision supplied.
 		# If the user specified None, we need to find the latest metadata for this path and ensure the
 		# data hash matches (otherwise it's not committed).
 		# What happens if it is a new version of the file that has been committed but has no metadata yet?
-		# ...we don't know wheter to update earlier commit or update specified commit.
+		# ...we don't know whether to update earlier commit or update specified commit.
 		# ---> So, a set command must always specify the behaviour otherwise unexpected things might happen.
 		if datarev is None:
-			if os.path.isfile(normpath):
-				# Check what the status of the file is
-				status = self.status_file(path)
-
-				if status > pygit2.GIT_STATUS_CURRENT:
-					MetadataRepository.errormsg("ERROR: File has been modified but not committed so this metadata is not valid. Use '{}:{}' syntax to see metadata.".format(datarev, path))
-					raise MetadataInvalidError("File has been modified but not committed so this metadata is not valid.")
-			elif os.path.isdir(normpath):
-				try:
-					expectedtree = self.revparse_single('HEAD:%s' % path)
-					if not isinstance(expectedtree, pygit2.Tree):
-						MetadataRepository.errormsg("ERROR: Path does not exist and data revision not specified.")
-						raise ParameterError("Path does not exist and data revision not specified")
-				except KeyError:
-					MetadataRepository.errormsg("ERROR: Path does not exist and data revision not specified.")
-					raise ParameterError("Path does not exist and data revision not specified")
-			else:
-				MetadataRepository.errormsg("ERROR: Path does not exist and data revision not specified.")
-				raise ParameterError("Path does not exist and data revision not specified")
-
+			datarev = self.generate_datarev(path)
 			# If we get here then the file or folder exists in the HEAD commit
-			datarev = 'HEAD'
-			MetadataRepository.errormsg("NOTE: Data revision not specified. Assuming '{}'.".format(datarev))
 
 		# Find the data commit
-		if datarevupdatemethod == DataRevisionUpdateMethod.FindAndUpdateEarlierMetadata:
+		if datarevupdatemethod == DataRevisionMetadataSearchMethod.SearchBackForEarlierMetadataAllowed:
 			datacommitwithobject = self.find_data_commit_with_object(datarev, path)
-		elif datarevupdatemethod == DataRevisionUpdateMethod.CreateNewMetadata:
+		elif datarevupdatemethod == DataRevisionMetadataSearchMethod.UseRevisionSpecifiedOnly:
 			datacommitwithobject = self.find_data_commit(datarev)
 		else:
 			raise ParameterError("Data revision update method required")
@@ -592,7 +596,6 @@ class MetadataRepository(pygit2.Repository):
 		MetadataRepository.errormsg("'{}' has been found in data commit {}".format(path, datacommitwithobjectid))
 		metadatablobpath = self.get_metadata_blob_path(path, streamname, datacommitwithobjectid)
 		MetadataRepository.errormsg("Metadata will be updated at path %s" % metadatablobpath)
-		return
 
 		try:
 			# Get the metadata
@@ -609,7 +612,7 @@ class MetadataRepository(pygit2.Repository):
 
 		commitid = self.save_metadata_blob(newfile, streamname, datacommitwithobjectid, path=path, force=force)
 
-	def print_metadata(self, streamname, datarev, path=None, fileaction=FileActions.dump, keyfilter=None, valuefilter=None):
+	def print_metadata(self, streamname, datarev, datarevgetmethod, path=None, fileaction=FileActions.dump, keyfilter=None, valuefilter=None):
 		path = self.check_path_request(path)
 
 		# Please note that if we set the datarev to the new default of HEAD, to know whether
@@ -621,24 +624,21 @@ class MetadataRepository(pygit2.Repository):
 		# version of the file.
 
 		if datarev is None:
-			# Assume HEAD
-			datarev = self.datarev_default_get
-			MetadataRepository.errormsg("NOTE: Data revision not specified. Assuming '{}'.".format(datarev))
+			datarev = self.generate_datarev(path)
+			# If we get here then the file or folder exists in the HEAD commit
 
-			# Check what the status of the file is
-			status = self.status_file(path)
+		try:
+			metadata_container = self.get_metadata_blob(streamname, datarev, path=path)
+		except MetadataBlobNotFoundError:
+			if datarevgetmethod == DataRevisionMetadataSearchMethod.SearchBackForEarlierMetadataAllowed:
+				# Get the data commit
+				datacommitwithobject = self.find_data_commit_with_object(datarev, path)
+				datacommitwithobjectid = datacommitwithobject.id.__str__()
 
-			if status > pygit2.GIT_STATUS_CURRENT:
-				MetadataRepository.errormsg("ERROR: File has been modified but not committed so this metadata is not valid. Use '{}:{}' syntax to see metadata.".format(datarev, path))
-				raise MetadataInvalidError("File has been modified but not committed so this metadata is not valid.")
-
-		# Get the data commit
-		datacommitwithobject = self.find_data_commit_with_object(datarev, path)
-
-		datacommitwithobjectid = datacommitwithobject.id.__str__()
-
-		# Get the metadata
-		metadata_container = self.get_metadata_blob(streamname, datacommitwithobjectid, path=path)
+				# Get the metadata
+				metadata_container = self.get_metadata_blob(streamname, datacommitwithobjectid, path=path)
+			else:
+				raise
 
 		if FileActions.is_action(fileaction, FileActions.json):
 			try:

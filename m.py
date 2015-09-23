@@ -137,16 +137,16 @@ class ParseMetadataRef(argparse.Action):
 		setattr(namespace, self.dest, metadataref)
 
 
-class ParseUpdateMethod(argparse.Action):
+class ParseDataRevisionMetadataSearchMethod(argparse.Action):
 
 	def __call__(self, parser, namespace, values, option_string=None):
 
 		# Check if we have an absolute reference path passed
 		if values == "searchback":
-			setattr(namespace, self.dest, DataRevisionUpdateMethod.FindAndUpdateEarlierMetadata)
+			setattr(namespace, self.dest, DataRevisionMetadataSearchMethod.SearchBackForEarlierMetadataAllowed)
 		elif values == "nosearchback":
 			# We don't have one so generate it
-			setattr(namespace, self.dest, DataRevisionUpdateMethod.CreateNewMetadata)
+			setattr(namespace, self.dest, DataRevisionMetadataSearchMethod.UseRevisionSpecifiedOnly)
 		else:
 			parser.error("Please specify 'searchback' or 'nosearchback'")
 
@@ -202,6 +202,12 @@ def parse_args():
 	parser_list = subparsers.add_parser('list')
 	parser_list.set_defaults(command=list)
 
+	parser_get.add_argument(
+		'datarevgetmethod',
+		choices=['searchback', 'nosearchback'],
+		action=ParseDataRevisionMetadataSearchMethod,
+		help="Search back for an earlier version of metadata for this file (searchback) or only display the metadata on the revision specified (nosearchback)")
+
 	# Set up 'get' subparser
 	parser_get.add_argument(
 		'path',
@@ -247,7 +253,7 @@ def parse_args():
 	parser_set.add_argument(
 		'datarevupdatemethod',
 		choices=['searchback', 'nosearchback'],
-		action=ParseUpdateMethod,
+		action=ParseDataRevisionMetadataSearchMethod,
 		help="Search back for an earlier version of metadata for this file and update it (searchback) or only update the metadata on the revision specified leaving metadata on previous commits unaltered (nosearchback)")
 
 	parser_set.add_argument(
@@ -296,7 +302,7 @@ def parse_args():
 def get(args):
 
 	repo = MetadataRepository(args.metadatapath, args.metadataref, debug=args.verbose)
-	repo.print_metadata(args.streamname, args.datarev, fileaction=args.fileaction, keyfilter=args.key, valuefilter=args.value)
+	repo.print_metadata(args.streamname, args.datarev, args.datarevgetmethod, fileaction=args.fileaction, keyfilter=args.key, valuefilter=args.value)
 
 
 def set(args):
