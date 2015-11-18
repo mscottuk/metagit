@@ -249,14 +249,15 @@ class MetadataRepository(pygit2.Repository):
 		# If we reach here, it is a directory or it was not found on the file system
 		raise DataBlobNotFoundError("Could not find data blob in repository")
 
-	def find_path_in_repository(self, datarev, normpath):
+	def find_path_in_repository(self, datarev, path):
+		normpath = os.path.normpath(path)
 
 		# Retrieve the item that the user wants us to list metadata for
 		if datarev is None:
 			# User did not specify a revision so we have to look on the file system
 			try:
 				# Without a data revision, we can only lookup a blob in the repository
-				dataitem = self.find_fs_blob_in_repository(normpath)
+				dataitem = self.find_fs_blob_in_repository(path)
 				print "* Blob specified has ID of %s" % dataitem.id
 				return dataitem
 			except DataBlobNotFoundError:
@@ -270,7 +271,7 @@ class MetadataRepository(pygit2.Repository):
 		else:
 			# We have a data revision so find the data in the repository
 			try:
-				dataitem = self.revparse_single("%s:%s" % (datarev, normpath))
+				dataitem = self.revparse_single("%s:%s" % (datarev, path))
 
 				# Check what the item is (file or directory)
 				if isinstance(dataitem, pygit2.Blob):
@@ -299,31 +300,28 @@ class MetadataRepository(pygit2.Repository):
 			dataitemcommitparents = [commit.id.__str__() for commit in self.walk(dataitemcommit.id, pygit2.GIT_SORT_REVERSE)]
 			self.debugmsg("parent commits %s " % dataitemcommitparents)
 
+		outputformatstr = "{:40} {:40} {:15} {:11} {!s:19}"
+
 		# Retrieve the data item requested
-		dataitemrequested = self.find_path_in_repository(datarev, normpath)
+		dataitemrequested = self.find_path_in_repository(datarev, path)
 
 		# Retrieve metadata node for the given path
 		metadatanode = self.get_metadata_node(streamname, path)
 
-		# Print details of all of the matching metadata (looking up the matching data commit)
-		print
-		outputformatstr = "{:41s}{:41s}{:16s}{:12}{}"
-		print outputformatstr.format("Data commit ID containing metadata", "Data in commit", "Data matches", "Inheritable", "Committed")
-		print outputformatstr.format("-------------------------", "--------------", "------------", "-----------", "---------")
+		matchingstrings = []
+		notmatchingstrings = []
 
 		# Iterate around each metadata item defined for the given path
 		for datacommitwithmetadataid in [metadataentry.name for metadataentry in metadatanode]:
 
-			metadatainheritable = (dataitemrequested is not None) and (datarev is not None) and (datacommitwithmetadataid in dataitemcommitparents)
-
-			try:
-				if dataitemrequested is None:
-					datacommitwithmetadatastr = "Matching data could not be found"
-					dataitemmatchesrequest = False
-					matchingdataidstr = "Matching data could not be found"
-				else:
+			if dataitemrequested is None:
+				datacommitwithmetadatastr = "Matching data could not be found"
+				dataitemmatchesrequest = False
+				matchingdataidstr = "Matching data could not be found"
+			else:
+				try:
 					# Attempt to find data commit that metadata pertains to
-					datacommitwithmetadata = self[datacommitwithmetadataid]
+					datacommitwithmetadata = self.find_data_commit(datacommitwithmetadataid)
 					datacommitwithmetadatastr = datetime.datetime.fromtimestamp(datacommitwithmetadata.commit_time)
 
 					# Attempt to find data item matching path
@@ -331,22 +329,53 @@ class MetadataRepository(pygit2.Repository):
 
 					if isinstance(dataitemrequested, pygit2.Tree):
 						dataitemmatchesrequest = isinstance(matchingdataitem, pygit2.Tree)
-						matchingdataidstr = path
+						matchingdataidstr = "Path '%s'" % normpath
 					else:
 						dataitemmatchesrequest = (matchingdataitem.id == dataitemrequested.id)
 						matchingdataidstr = matchingdataitem.id
 
-			except KeyError:
-				# Data could not be found
-				datacommitwithmetadatastr = "Matching data could not be found"
-				matchingdataidstr = "Matching data could not be found"
-				dataitemmatchesrequest = False
+				except (NoDataError, KeyError):
+					# Data could not be found
+					datacommitwithmetadatastr = "Matching data could not be found"
+					matchingdataidstr = "Matching data could not be found"
+					dataitemmatchesrequest = False
 
-			matchingdatastr = ("YES" if dataitemmatchesrequest else "NO")
+			metadatainheritable = (dataitemrequested is not None) and (datarev is not None) and (datacommitwithmetadataid in dataitemcommitparents) and (dataitemmatchesrequest)
 			metadatainheritablestr = ("YES" if metadatainheritable else "NO")
+			matchingdatastr = ("YES" if dataitemmatchesrequest else "NO")
 
 			# if datarev is None or (dataitemmatchesrequest and metadatainheritable):
-			print outputformatstr.format(datacommitwithmetadataid, matchingdataidstr, matchingdatastr, metadatainheritablestr, datacommitwithmetadatastr)
+			outputstring = outputformatstr.format(datacommitwithmetadataid, matchingdataidstr, matchingdatastr, metadatainheritablestr, datacommitwithmetadatastr)
+			if ((dataitemrequested is not None) or (datarev is None)) and dataitemmatchesrequest:
+				matchingstrings.append(outputstring)
+			else:
+				notmatchingstrings.append(outputstring)
+
+		print
+		print outputformatstr.format("=" * 40, "=" * 40, "=" * 15, "=" * 11, "=" * 19)
+		print outputformatstr.format("Data commit ID containing metadata", "Data in commit", "Data matches", "Inheritable", "Committed")
+		print outputformatstr.format("-" * 40, "-" * 40, "-" * 15, "-" * 11, "-" * 19)
+
+		if len(matchingstrings) > 0:
+			# Print details of all of the matching metadata (looking up the matching data commit)
+			print "Found the following matches:"
+			print "\n".join(matchingstrings)
+		else:
+			print "None found"
+
+		# print
+		# print outputformatstr.format("Data commit ID containing metadata", "Data in commit", "Data matches", "Inheritable", "Committed")
+		# print outputformatstr.format("-" * 40, "-" * 40, "-" * 15, "-" * 11, "-" * 19)
+
+		print outputformatstr.format("-" * 40, "-" * 40, "-" * 15, "-" * 11, "-" * 19)
+		print "Other versions of metadata for same path:"
+		if len(notmatchingstrings) > 0:
+			print "\n".join(notmatchingstrings)
+		else:
+			print "None found"
+
+		print outputformatstr.format("=" * 40, "=" * 40, "=" * 15, "=" * 11, "=" * 19)
+		print
 
 	def write_tree_hierarchy(self, parentslist, newentryid, force=False):
 		newentry = self[newentryid]
@@ -611,6 +640,40 @@ class MetadataRepository(pygit2.Repository):
 		newfile = json.dumps(jsondict)
 
 		commitid = self.save_metadata_blob(newfile, streamname, datacommitwithobjectid, path=path, force=force)
+
+	def copy_metadata(self, sourcestreamname, sourcedatarev, deststreamname, destdatarev, sourcepath, destpath, datarevupdatemethod, force=False):
+
+		# Check the data revision supplied.
+		# If the user specified None, we need to find the latest metadata for this path and ensure the
+		# data hash matches (otherwise it's not committed).
+		# What happens if it is a new version of the file that has been committed but has no metadata yet?
+		# ...we don't know whether to update earlier commit or update specified commit.
+		# ---> So, a set command must always specify the behaviour otherwise unexpected things might happen.
+		if sourcedatarev is None or destdatarev is None or sourcepath is None or destpath is None:
+			raise ParameterError("Source datarev and dest datarev must be specified for copy")
+
+		# Find the data commit
+		if datarevupdatemethod == DataRevisionMetadataSearchMethod.SearchBackForEarlierMetadataAllowed:
+			sourcedatacommitwithobject = self.find_data_commit_with_object(sourcedatarev, sourcepath)
+			destdatacommitwithobject = self.find_data_commit_with_object(destdatarev, destpath)
+		elif datarevupdatemethod == DataRevisionMetadataSearchMethod.UseRevisionSpecifiedOnly:
+			sourcedatacommitwithobject = self.find_data_commit(sourcedatarev)
+			destdatacommitwithobject = self.find_data_commit(destdatarev)
+		else:
+			raise ParameterError("Data revision update method required")
+
+		sourcedatacommitwithobjectid = sourcedatacommitwithobject.id.__str__()
+		destdatacommitwithobjectid = destdatacommitwithobject.id.__str__()
+
+		MetadataRepository.errormsg("'{}' has been found in data commit {}".format(sourcepath, sourcedatacommitwithobjectid))
+		sourcemetadatablobpath = self.get_metadata_blob_path(sourcepath, sourcestreamname, sourcedatacommitwithobjectid)
+		destmetadatablobpath = self.get_metadata_blob_path(destpath, deststreamname, destdatacommitwithobjectid)
+		MetadataRepository.errormsg("Metadata will be copied from '{}' to '{}'".format(sourcemetadatablobpath, destmetadatablobpath))
+
+		# Get the metadata, not handling any exceptions if the blob is not found
+		sourcemetadatablob = self.get_metadata_blob(sourcestreamname, sourcedatacommitwithobjectid, path=sourcepath)
+
+		newcommitid = self.save_metadata_blob(sourcemetadatablob, deststreamname, destdatacommitwithobjectid, path=destpath, force=force)
 
 	def print_metadata(self, streamname, datarev, datarevgetmethod, path=None, fileaction=FileActions.dump, keyfilter=None, valuefilter=None):
 		path = self.check_path_request(path)
