@@ -87,9 +87,9 @@ class ParsePathAndStream(argparse.Action):
 		streamname = values_split.group(3) or ParsePathAndStream.stream_default
 
 		setattr(namespace, self.dest, values)
-		setattr(namespace, 'datarev', datarev)
-		setattr(namespace, 'metadatapath', path)
-		setattr(namespace, 'streamname', streamname)
+		setattr(namespace, self.dest + '_datarev', datarev)
+		setattr(namespace, self.dest + '_metadatapath', path)
+		setattr(namespace, self.dest + '_streamname', streamname)
 
 
 # THIS ONE PARSES TWO PARTS:
@@ -202,6 +202,9 @@ def parse_args():
 	parser_list = subparsers.add_parser('list')
 	parser_list.set_defaults(command=list)
 
+	parser_copy = subparsers.add_parser('copy')
+	parser_copy.set_defaults(command=copy)
+
 	parser_get.add_argument(
 		'datarevgetmethod',
 		choices=['searchback', 'nosearchback'],
@@ -286,23 +289,36 @@ def parse_args():
 		action=ParsePathAndStream,
 		help="%s The path to the metadata object. The default branch and stream will be used if not specified." % ParsePathAndStream.syntax)
 
-	args = parser.parse_args()
+	parser_copy.add_argument(
+		'datarevupdatemethod',
+		choices=['searchback', 'nosearchback'],
+		action=ParseDataRevisionMetadataSearchMethod,
+		help="Search back for an earlier version of metadata for this file and update it (searchback) or only update the metadata on the revision specified leaving metadata on previous commits unaltered (nosearchback)")
 
-	if args.verbose:
-		MetadataRepository.errormsg("** Parsed Arguments **")
-		MetadataRepository.errormsg("Unparsed path : '%s'" % args.path)
-		MetadataRepository.errormsg("datarev       : %s" % args.datarev)
-		MetadataRepository.errormsg("metadatapath  : " + args.metadatapath)
-		MetadataRepository.errormsg("stream        : " + args.streamname)
-		MetadataRepository.errormsg("")
+
+	parser_copy.add_argument(
+		'sourcepath',
+		nargs="?",
+		default=ParsePathAndStream.path_default,
+		action=ParsePathAndStream,
+		help="%s The path to the metadata object. The default branch and stream will be used if not specified." % ParsePathAndStream.syntax)
+
+	parser_copy.add_argument(
+		'destpath',
+		nargs="?",
+		default=ParsePathAndStream.path_default,
+		action=ParsePathAndStream,
+		help="%s The path to the metadata object. The default branch and stream will be used if not specified." % ParsePathAndStream.syntax)
+
+	args = parser.parse_args()
 
 	return args
 
 
 def get(args):
 
-	repo = MetadataRepository(args.metadatapath, args.metadataref, debug=args.verbose)
-	repo.print_metadata(args.streamname, args.datarev, args.datarevgetmethod, fileaction=args.fileaction, keyfilter=args.key, valuefilter=args.value)
+	repo = MetadataRepository(args.path_metadatapath, args.metadataref, debug=args.verbose)
+	repo.print_metadata(args.path_streamname, args.path_datarev, args.datarevgetmethod, fileaction=args.fileaction, keyfilter=args.key, valuefilter=args.value)
 
 
 def set(args):
@@ -314,13 +330,32 @@ def set(args):
 	if sep != "=":
 		raise KeyValuePairArgumentError(KeyValuePairArgumentError.__doc__)
 
-	repo = MetadataRepository(args.metadatapath, args.metadataref, debug=args.verbose)
-	repo.update_metadata(k, v, args.streamname, args.datarev, args.datarevupdatemethod, force=args.force)
+	repo = MetadataRepository(args.path_metadatapath, args.metadataref, debug=args.verbose)
+	repo.update_metadata(k, v, args.path_streamname, args.path_datarev, args.datarevupdatemethod, force=args.force)
 
 
 def list(args):
-	repo = MetadataRepository(args.metadatapath, args.metadataref, debug=args.verbose)
-	repo.list_metadata_in_stream(args.datarev, args.streamname)
+	repo = MetadataRepository(args.path_metadatapath, args.metadataref, debug=args.verbose)
+	repo.list_metadata_in_stream(args.path_datarev, args.path_streamname)
+
+
+def copy(args):
+
+	if args.verbose:
+		MetadataRepository.errormsg("** Parsed Arguments **")
+		MetadataRepository.errormsg("Unparsed path : '%s'" % args.sourcepath)
+		MetadataRepository.errormsg("datarev       : %s" % args.sourcepath_datarev)
+		MetadataRepository.errormsg("metadatapath  : " + args.sourcepath_metadatapath)
+		MetadataRepository.errormsg("stream        : " + args.sourcepath_streamname)
+		MetadataRepository.errormsg("")
+		MetadataRepository.errormsg("Unparsed path : '%s'" % args.destpath)
+		MetadataRepository.errormsg("datarev       : %s" % args.destpath_datarev)
+		MetadataRepository.errormsg("metadatapath  : " + args.destpath_metadatapath)
+		MetadataRepository.errormsg("stream        : " + args.destpath_streamname)
+		MetadataRepository.errormsg("")
+
+	repo = MetadataRepository(args.sourcepath_metadatapath, args.metadataref, debug=args.verbose)
+	repo.copy_metadata(args.sourcepath_streamname, args.sourcepath_datarev, args.destpath_streamname, args.destpath_datarev, args.sourcepath_metadatapath, args.destpath_metadatapath, args.datarevupdatemethod)
 
 
 if __name__ == "__main__":
