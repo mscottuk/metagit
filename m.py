@@ -18,9 +18,9 @@ import re  # Regular expressions
 #   m get [-h] [--storeonly] [--key KEY] [--dump | --json] [path]
 #
 # Examples:
-#   m add author="Charles Darwin" orgin.pdf
-#   m add title="On the Origin of Species" orgin.pdf
-#   m get orgin.pdf
+#   m add author="Charles Darwin" origin.pdf
+#   m add title="On the Origin of Species" origin.pdf
+#   m get origin.pdf
 #   m get --key author origin.pdf
 
 # class ParsePathAction(argparse.Action):
@@ -71,25 +71,36 @@ class ParsePathAndStream(argparse.Action):
 		# branch:dir         = 'branch','dir',''
 		# branch::metadata     = 'branch','','metadata'
 
+		
 		# Try branch:dir:metadata or branch:dir:'' first
-		values_split = re.match(r'^([^:\r\n]*):([^:\r\n]*):?([^:\r\n]*)$', values)
+		values_split = re.match(r'^s(?:earch)?([-\+])([^:\r\n]*):([^:\r\n]*):?([^:\r\n]*)$', values)
 
 		# Next, if that didn't work, try just matching dir
 		if values_split is None:
-			values_split = re.match(r'^()([^:\r\n]*)()$', values)
-
+			values_split = re.match(r'^s(?:earch)?([-\+])():?([^:\r\n]*)()$', values)
+		
 		# Wrong format received - possibly too many ':'s in string
 		if values_split is None:
-			parser.error("Could not parse '%s'. Please use syntax %s." % (values, ParsePathAndStream.syntax))
+			parser.error("Could not parse '%s'. Please use syntax (s+|s-)%s." % (values, ParsePathAndStream.syntax))
 
-		datarev = values_split.group(1) or ParsePathAndStream.datarev_default
-		path       = values_split.group(2) or ParsePathAndStream.path_default
-		streamname = values_split.group(3) or ParsePathAndStream.stream_default
+		searching = values_split.group(1)
+		datarev = values_split.group(2) or ParsePathAndStream.datarev_default
+		path       = values_split.group(3) or ParsePathAndStream.path_default
+		streamname = values_split.group(4) or ParsePathAndStream.stream_default
 
 		setattr(namespace, self.dest, values)
 		setattr(namespace, self.dest + '_datarev', datarev)
 		setattr(namespace, self.dest + '_metadatapath', path)
 		setattr(namespace, self.dest + '_streamname', streamname)
+		
+		print searching
+		if searching in ["+"]:
+			setattr(namespace, self.dest + '_datarevsearchmethod', DataRevisionMetadataSearchMethod.SearchBackForEarlierMetadataAllowed)
+		elif searching in ["-"]:
+			setattr(namespace, self.dest + '_datarevsearchmethod', DataRevisionMetadataSearchMethod.UseRevisionSpecifiedOnly)
+		else:
+			parser.error("Please specify 's+' or 's-'")
+		
 
 
 # THIS ONE PARSES TWO PARTS:
@@ -205,11 +216,11 @@ def parse_args():
 	parser_copy = subparsers.add_parser('copy')
 	parser_copy.set_defaults(command=copy)
 
-	parser_get.add_argument(
-		'datarevgetmethod',
-		choices=['searchback', 'nosearchback'],
-		action=ParseDataRevisionMetadataSearchMethod,
-		help="Search back for an earlier version of metadata for this file (searchback) or only display the metadata on the revision specified (nosearchback)")
+# 	parser_get.add_argument(
+# 		'datarevgetmethod',
+# 		choices=['searchback', 'nosearchback'],
+# 		action=ParseDataRevisionMetadataSearchMethod,
+# 		help="Search back for an earlier version of metadata for this file (searchback) or only display the metadata on the revision specified (nosearchback)")
 
 	# Set up 'get' subparser
 	parser_get.add_argument(
@@ -253,11 +264,11 @@ def parse_args():
 	# 					default=None,
 	# 					help='The revision for which to view metadata')
 
-	parser_set.add_argument(
-		'datarevupdatemethod',
-		choices=['searchback', 'nosearchback'],
-		action=ParseDataRevisionMetadataSearchMethod,
-		help="Search back for an earlier version of metadata for this file and update it (searchback) or only update the metadata on the revision specified leaving metadata on previous commits unaltered (nosearchback)")
+# 	parser_set.add_argument(
+# 		'datarevupdatemethod',
+# 		choices=['searchback', 'nosearchback'],
+# 		action=ParseDataRevisionMetadataSearchMethod,
+# 		help="Search back for an earlier version of metadata for this file and update it (searchback) or only update the metadata on the revision specified leaving metadata on previous commits unaltered (nosearchback)")
 
 	parser_set.add_argument(
 		'keyvaluepair',
@@ -289,11 +300,11 @@ def parse_args():
 		action=ParsePathAndStream,
 		help="%s The path to the metadata object. The default branch and stream will be used if not specified." % ParsePathAndStream.syntax)
 
-	parser_copy.add_argument(
-		'datarevupdatemethod',
-		choices=['searchback', 'nosearchback'],
-		action=ParseDataRevisionMetadataSearchMethod,
-		help="Search back for an earlier version of metadata for this file and update it (searchback) or only update the metadata on the revision specified leaving metadata on previous commits unaltered (nosearchback)")
+# 	parser_copy.add_argument(
+# 		'datarevupdatemethod',
+# 		choices=['searchback', 'nosearchback'],
+# 		action=ParseDataRevisionMetadataSearchMethod,
+# 		help="Search back for an earlier version of metadata for this file and update it (searchback) or only update the metadata on the revision specified leaving metadata on previous commits unaltered (nosearchback)")
 
 
 	parser_copy.add_argument(
@@ -318,7 +329,7 @@ def parse_args():
 def get(args):
 
 	repo = MetadataRepository(args.path_metadatapath, args.metadataref, debug=args.verbose)
-	repo.print_metadata(args.path_streamname, args.path_datarev, args.datarevgetmethod, fileaction=args.fileaction, keyfilter=args.key, valuefilter=args.value)
+	repo.print_metadata(args.path_streamname, args.path_datarev, args.path_datarevsearchmethod, fileaction=args.fileaction, keyfilter=args.key, valuefilter=args.value)
 
 
 def set(args):
@@ -331,7 +342,7 @@ def set(args):
 		raise KeyValuePairArgumentError(KeyValuePairArgumentError.__doc__)
 
 	repo = MetadataRepository(args.path_metadatapath, args.metadataref, debug=args.verbose)
-	repo.update_metadata(k, v, args.path_streamname, args.path_datarev, args.datarevupdatemethod, force=args.force)
+	repo.update_metadata(k, v, args.path_streamname, args.path_datarev, args.path_datarevsearchmethod, force=args.force)
 
 
 def list(args):
@@ -355,7 +366,7 @@ def copy(args):
 		MetadataRepository.errormsg("")
 
 	repo = MetadataRepository(args.sourcepath_metadatapath, args.metadataref, debug=args.verbose)
-	repo.copy_metadata(args.sourcepath_streamname, args.sourcepath_datarev, args.destpath_streamname, args.destpath_datarev, args.sourcepath_metadatapath, args.destpath_metadatapath, args.datarevupdatemethod)
+	repo.copy_metadata(args.sourcepath_streamname, args.sourcepath_datarev, args.destpath_streamname, args.destpath_datarev, args.sourcepath_metadatapath, args.destpath_metadatapath, args.destpath_datarevsearchmethod)
 
 
 if __name__ == "__main__":
