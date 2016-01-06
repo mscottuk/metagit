@@ -254,7 +254,7 @@ class MetadataRepository(pygit2.Repository):
 		# otherwise create a new one
 		try:
 			# Find metadata branch
-			currentmetadatacommit = self.find_metadata_commit(self.metadataref)
+			currentmetadatacommit = self.get_metadata_commit(self.metadataref)
 			metadatareftoupdate = self.metadataref
 			commitparentids = [currentmetadatacommit.id]
 
@@ -268,7 +268,7 @@ class MetadataRepository(pygit2.Repository):
 		newblobid = self.create_blob(newfile)
 
 		# Find the data commit
-		datacommitid = self.find_data_commit(path.datarev).id.__str__()
+		datacommitid = self.get_data_commit(path.datarev).id.__str__()
 
 		# Save metadata tree
 		parentspath = self.get_metadata_blob_path(path.metadatapath, path.streamname, datacommitid)
@@ -310,14 +310,14 @@ class MetadataRepository(pygit2.Repository):
 		if source.datarevsearchmethod == DataRevisionMetadataSearchMethod.SearchBackForEarlierMetadataAllowed:
 			sourcedatacommitwithobject = self.find_data_commit_with_object(source.datarev, source.metadatapath)
 		elif source.datarevsearchmethod == DataRevisionMetadataSearchMethod.UseRevisionSpecifiedOnly:
-			sourcedatacommitwithobject = self.find_data_commit(source.datarev)
+			sourcedatacommitwithobject = self.get_data_commit(source.datarev)
 		else:
 			raise ParameterError("Data revision update method required")
 		
 		if dest.datarevsearchmethod == DataRevisionMetadataSearchMethod.SearchBackForEarlierMetadataAllowed:
 			destdatacommitwithobject = self.find_data_commit_with_object(dest.datarev, dest.metadatapath)
 		elif dest.datarevsearchmethod == DataRevisionMetadataSearchMethod.UseRevisionSpecifiedOnly:
-			destdatacommitwithobject = self.find_data_commit(dest.datarev)
+			destdatacommitwithobject = self.get_data_commit(dest.datarev)
 		else:
 			raise ParameterError("Data revision update method required")
 		
@@ -334,7 +334,7 @@ class MetadataRepository(pygit2.Repository):
 
 		#newcommitid = self.save_metadata_blob(sourcemetadatablob, deststreamname, destdatacommitwithobjectid, path=destpath, force=force)
 
-	def find_data_commit(self, datarev):
+	def get_data_commit(self, datarev):
 		try:
 			commit = self.revparse_single(datarev)
 			if not isinstance(commit, pygit2.Commit):
@@ -344,7 +344,7 @@ class MetadataRepository(pygit2.Repository):
 		except KeyError:
 			raise NoDataError("Could not find matching data " + datarev)
 
-	def find_metadata_commit(self, metadataref):
+	def get_metadata_commit(self, metadataref):
 		try:
 			metadatacommit = self.revparse_single(metadataref)
 			if not isinstance(metadatacommit, pygit2.Commit):
@@ -589,7 +589,7 @@ class MetadataRepository(pygit2.Repository):
 			else:
 				try:
 					# Attempt to find data commit that metadata pertains to
-					datacommitwithmetadata = self.find_data_commit(datacommitwithmetadataid)
+					datacommitwithmetadata = self.get_data_commit(datacommitwithmetadataid)
 					datacommitwithmetadatastr = datetime.datetime.fromtimestamp(datacommitwithmetadata.commit_time)
 
 					# Attempt to find data item matching path
@@ -734,7 +734,7 @@ class MetadataRepository(pygit2.Repository):
 		if metadataref is None:
 			metadataref = self.metadataref
 
-		metaadatacommit = self.find_metadata_commit(metadataref)
+		metaadatacommit = self.get_metadata_commit(metadataref)
 
 		# Retrieve metadata node
 		try:
@@ -766,10 +766,10 @@ class MetadataRepository(pygit2.Repository):
 		path = self.parse_path_parameter(pathreq, fixdatarev=True)
 
 		# Find metadata branch
-		metaadatacommit = self.find_metadata_commit(self.metadataref)
+		metaadatacommit = self.get_metadata_commit(self.metadataref)
 
 		# Find the data commit
-		datacommitid = self.find_data_commit(path.datarev).id.__str__()
+		datacommitid = self.get_data_commit(path.datarev).id.__str__()
 
 		# Generate the path from the object requested, stream name and revision
 		metadatablobpath = self.get_metadata_blob_path(path.metadatapath, path.streamname, datacommitid)
@@ -853,7 +853,7 @@ class MetadataRepository_old(pygit2.Repository):
 		if datarevupdatemethod == DataRevisionMetadataSearchMethod.SearchBackForEarlierMetadataAllowed:
 			datacommitwithobject = self.find_data_commit_with_object(datarev, path)
 		elif datarevupdatemethod == DataRevisionMetadataSearchMethod.UseRevisionSpecifiedOnly:
-			datacommitwithobject = self.find_data_commit(datarev)
+			datacommitwithobject = self.get_data_commit(datarev)
 		else:
 			raise ParameterError("Data revision update method required")
 
