@@ -154,7 +154,7 @@ class MetadataPath:
 		if not os.path.isabs(self.metadatapath):
 			self.metadatapath = os.path.join(base_path or os.getcwd(), self.metadatapath)
 			self.metadatapath = os.path.normpath(self.metadatapath)
-			print "Using %s for base path" % (base_path and base_path or "current directory")
+			MetadataRepository.errormsg("Using %s for base path" % (base_path and base_path or "current directory"))
 		
 		# Check if the path is within the repository
 		if repo:
@@ -168,10 +168,10 @@ class MetadataPath:
 		else:
 			self.repo = None
 
-		MetadataRepository.errormsg( "datarev:" + (self.datarev or "NONE"))
-		MetadataRepository.errormsg( "datarevsearchmethod: %s" % self.datarevsearchmethod)
-		MetadataRepository.errormsg( "metadatapath:" + self.metadatapath)
-		MetadataRepository.errormsg( "streamname:" + self.streamname)
+# 		MetadataRepository.errormsg( "datarev:" + (self.datarev or "NONE"))
+# 		MetadataRepository.errormsg( "datarevsearchmethod: %s" % self.datarevsearchmethod)
+# 		MetadataRepository.errormsg( "metadatapath:" + self.metadatapath)
+# 		MetadataRepository.errormsg( "streamname:" + self.streamname)
 
 
 		
@@ -247,7 +247,7 @@ class MetadataRepository(pygit2.Repository):
 			raise KeyError("Could not find a Git repository")
 
 
-	def save_metadata_blob(self, newfile, pathreq, force=False):
+	def save_metadata_blob(self, pathreq, newdata, force=False):
 		path = self.parse_path_parameter(pathreq, fixdatarev=True)
 
 		# Branch might not exist yet, so try to find the metadata branch,
@@ -265,7 +265,7 @@ class MetadataRepository(pygit2.Repository):
 			commitparentids = []
 
 		# Save the object into the repository
-		newblobid = self.create_blob(newfile)
+		newblobid = self.create_blob(newdata)
 
 		# Find the data commit
 		datacommitid = self.get_data_commit(path.datarev).id.__str__()
@@ -406,7 +406,7 @@ class MetadataRepository(pygit2.Repository):
 			status = self.status_file(path.metadatapath)
 
 			if status > pygit2.GIT_STATUS_CURRENT:
-				raise MetadataInvalidError("File has been modified but not committed so this metadata is not valid. Use '{}:{}' syntax to see metadata.".format(datarev, path))
+				raise MetadataInvalidError("File has been modified but not committed so this metadata is not valid. Use '{}:{}' syntax to see metadata.".format(datarev, path.metadatapath))
 		elif os.path.isdir(abspath):
 			# Try to find the directory in the revision specified
 			try:
@@ -496,7 +496,13 @@ class MetadataRepository(pygit2.Repository):
 
 		return datacommitwithobject
 
+	# Given a path, we compare the parent commit to the current commit to see if this was
+	# the commit where the tree was added. If not added at this commit, we call ourselves with the parent
+	# commit to check if the tree was added in the parent, and so on until there are no more parents.
+	# It is assumed that the tree is in the current commit when first called, otherwise this would have to be
+	# checked with a revparse_single for each call which would slow down the routine
 	def find_first_data_commit_with_tree(self, treepath, currentcommit):
+	
 		if len(currentcommit.parents) > 1:
 			raise MetadataReadError("Merges not supported")
 		elif len(currentcommit.parents) == 0:
@@ -514,13 +520,15 @@ class MetadataRepository(pygit2.Repository):
 					# Try next one
 					return self.find_first_data_commit_with_tree(treepath, parentcommit)
 			except KeyError:
-				# Tree could not be found
+				# Tree could not be found in the parent, so current commit is the first to contain this tree
 				return currentcommit
 
-	# Given a data object and a commit, we compare the parent to the current commit to see
+	# Given a data object and a commit, we compare the parent commit to the current commit to see
 	# if this was the commit where the blob was added. If not added at this commit, we
 	# call ourselves with the parent commit to check if the blob was added in the parent,
-	# and so on until there are no more parents.
+	# and so on until there are no more parents. It is assumed that the data object is in the current commit
+	# when first called otherwise this would have to be checked with a revparse_single for each call
+	# which would slow down the routine.
 	def find_first_data_commit_with_blob(self, dataobject, currentcommit):
 		currenttree = currentcommit.tree
 
@@ -550,6 +558,56 @@ class MetadataRepository(pygit2.Repository):
 		else:
 			return None
 
+	# Find metadata for path, working backwards through commits starting from passed data commit ID
+	# It is assumed that the data object was is in the current commit when first called.
+	def find_first_data_commit_with_metadata_for_blob(self, dataobject, currentcommit, path):
+		# check metadata exists in current commit. if metadata exists, return current commit, else recurse
+		
+		if not isinstance(path, MetadataPath):
+			raise ParameterError("Passed path was not an instance of MetadataPath")
+
+		# We assume the object exists, check if it has metadata
+		try:
+			# Try to get the metadata
+			metadatablobpath = self.get_metadata_blob_path(path.metadatapath, path.streamname, currentcommit.id.__str__())
+			
+			# Find metadata branch
+			metadatacommit = self.get_metadata_commit(self.metadataref)
+			
+			# Find metadata blob
+			metadatablob = self.revparse_single("%s:%s" % (metadatacommit.id, metadatablobpath))
+			if not isinstance(metadatablob, pygit2.Blob):
+				raise MetadataBlobNotFoundError("Something wrong with the metadata at " + metadatablobpath)
+			else:
+				# Found it, return this commit
+				return currentcommit
+
+		except KeyError:
+
+			if len(currentcommit.parents) > 1:
+				raise MetadataReadError("Merges not supported")
+			elif len(currentcommit.parents) == 0 or path.datarevsearchmethod != DataRevisionMetadataSearchMethod.SearchBackForEarlierMetadataAllowed:
+				# No parent commit so can't find the metadata
+				return None
+
+			# Compare against the commit's parent
+			parentcommit = currentcommit.parents[0]
+
+			# check blob exists in parent commit by checking ID and path, if not return current commit
+			try:
+				objectatpath = self.revparse_single("%s:%s" % (parentcommit.id, path.metadatapath))
+				objectsaretrees = isinstance(dataobject, pygit2.Tree) and isinstance(objectatpath, pygit2.Tree)
+
+				# Data object doesn't exist so return None because we have reached a commit we cannot go past
+				if objectatpath.id != dataobject.id and not objectsaretrees:
+					return None
+			
+			# Data object doesn't exist so return None
+			except KeyError:
+				return None
+
+			# Check the next parent for metadata
+			return self.find_first_data_commit_with_metadata_for_blob(dataobject, parentcommit, path)
 
 	# LIST FUNCTIONS
 	def list_metadata_in_stream(self, pathreq):
@@ -657,6 +715,9 @@ class MetadataRepository(pygit2.Repository):
 		dataitemcommit = self.revparse_single("%s" % path.datarev)
 		dataitemcommitparents = [commit for commit in self.walk(dataitemcommit.id, pygit2.GIT_SORT_TIME)]
 
+		# Retrieve the data item requested if we can find it
+		dataitemrequested = self.find_path_in_repository(path.datarev, path.metadatapath)
+
 		metadatacommits ={}
 		try:
 			streamnamesforpath = [stream.name for stream in self.get_metadata_node(path.metadatapath)]
@@ -670,24 +731,93 @@ class MetadataRepository(pygit2.Repository):
 		except MetadataBlobNotFoundError as e:
 			pass
 
+# 		print "-- -----------------------"
+		print
+		print "DM  {:40}  {:19}".format("Data commit ID:", "Data commit date:")
+		print "--  {:40}  {:19}".format("-" * 40, "-" * 19)
+
 		metadatafound = False
 		for commit in dataitemcommitparents:
+			commit_info_string = "%s  %s" % (commit.id, datetime.datetime.fromtimestamp(commit.commit_time))
 
-			commit_info_string = "%s, %s" % (commit.id, datetime.datetime.fromtimestamp(commit.commit_time))
+			try:
+				# Attempt to find data item matching path
+				matchingdataitem = self.revparse_single("%s:%s" % (commit.id, path.metadatapath))
+
+				if isinstance(dataitemrequested, pygit2.Tree):
+					dataitemmatchesrequest = isinstance(matchingdataitem, pygit2.Tree)
+				elif isinstance(dataitemrequested, pygit2.Blob):
+					dataitemmatchesrequest = (matchingdataitem.id == dataitemrequested.id)
+				else:
+					dataitemmatchesrequest = False
+			except (NoDataError, KeyError):
+				# Data could not be found
+				dataitemmatchesrequest = False
 			
 			if commit.id.__str__() in metadatacommits:
-				print "M " + commit_info_string
-				print " \\"
+
+				print "%sM  %s" % ((dataitemmatchesrequest and "D" or "-"), commit_info_string)
+				print "  \\    %s" % ""
 				metadatafound = True
 				for streamname in metadatacommits[commit.id.__str__()]:
-					print "  * Stream: %s" % streamname
+					print "   * Stream: %s" % ( streamname )
 			else:
-				print "  " + commit_info_string
+				print "%s-  %s" % ((dataitemmatchesrequest and "D" or "-"), commit_info_string)
+		print
 		
-		if not metadatafound:
+		if metadatafound:
+			print "KEY:"
+			print "D=Data in commit matches request"
+			print " M=Metadata streams found at path"
+			print
+		else:
 			print
 			print "No metadata was found"
 			print
+
+	def print_tree(self, tree, indent=0):
+		if not isinstance(tree, pygit2.Tree):
+			raise ParameterError("Tree expected")
+
+		# If we are at the top level, check if there is any metadata
+		if indent==0:
+			metadataexists = self.metadata_name in tree
+			print ("%s /") % (metadataexists and "M" or "-")
+
+		indentstr=" "*indent
+		for entry in tree:
+			if (entry.type == "tree"):
+				if entry.name!=self.metadata_name:
+					metadataexists = self.metadata_name in self[entry.id]
+					print ("%s " + indentstr + entry.name) % (metadataexists and "M" or "-")
+					self.print_tree(self[entry.id], indent=indent+1)
+					
+				# Ignore the metadata entry
+				else:
+					pass
+
+			# We shouldn't have any blobs so we'll ignore them
+			# (blobs should only exist in metadata nodes)
+			elif (entry.type == "blob"):
+				MetadataRepository.errormsg("Ignoring blob '%s'" % entry.name)
+				
+			# We shouldn't have any other type of object so we'll ignore it
+			else:
+				MetadataRepository.errormsg("Ignoring entry '%s' of type '%s'" % (entry.name, entry.type))
+
+	def list_metadata_objects(self):
+		# Find metadata branch
+		metadatacommit = self.get_metadata_commit(self.metadataref)
+		
+		self.print_tree(metadatacommit.tree)
+# 		for f in metadatacommit.tree:
+# 			if (f.type == "tree"):
+# 				print "Tree " + f.name
+# 			elif (f.type == "blob"):
+# 				print "Blob " + f.name
+# 			else:
+# 				print "Other %s" % type(f)
+		
 
 	def find_path_in_repository(self, datarev, path):
 		normpath = os.path.normpath(path)
@@ -760,23 +890,46 @@ class MetadataRepository(pygit2.Repository):
 		metadatastream = self.get_metadata_tree(metadatastreampath, metadataref=metadataref)
 		return metadatastream
 
+	def find_metadata_blob(self, pathobj):
+		if not isinstance(pathobj, MetadataPath):
+			raise ParameterError("Passed path was not an instance of MetadataPath")
+
+		# Find the data commit
+		if pathobj.datarevsearchmethod == DataRevisionMetadataSearchMethod.SearchBackForEarlierMetadataAllowed:
+			datacommitwithobject = self.find_data_commit_with_object(datarev, path)
+		elif pathobj.datarevsearchmethod == DataRevisionMetadataSearchMethod.UseRevisionSpecifiedOnly:
+			datacommitwithobject = self.get_data_commit(datarev)
+		else:
+			raise ParameterError("Data revision method required")
+
+		 
 	def get_metadata_blob(self, pathreq):
 
 		# Parse path parameter
 		path = self.parse_path_parameter(pathreq, fixdatarev=True)
 
 		# Find metadata branch
-		metaadatacommit = self.get_metadata_commit(self.metadataref)
+		metadatacommit = self.get_metadata_commit(self.metadataref)
 
 		# Find the data commit
-		datacommitid = self.get_data_commit(path.datarev).id.__str__()
+		datacommit = self.get_data_commit(path.datarev)
+		datacommitid = datacommit.id.__str__()
 
 		# Generate the path from the object requested, stream name and revision
-		metadatablobpath = self.get_metadata_blob_path(path.metadatapath, path.streamname, datacommitid)
+# 		metadatablobpath = self.get_metadata_blob_path(path.metadatapath, path.streamname, datacommitid)
+
+		dataobject = self.revparse_single("%s:%s" % (path.datarev, path.metadatapath))
+		
+		datacommitwithmetadata = self.find_first_data_commit_with_metadata_for_blob(dataobject, datacommit, path)
+		
+		if datacommitwithmetadata is None:
+			raise MetadataBlobNotFoundError("Could not find metadata blob in the tree")
 
 		# Try to get the blob
 		try:
-			metadatablob = self.revparse_single("%s:%s" % (metaadatacommit.id, metadatablobpath))
+			metadatablobpath = self.get_metadata_blob_path(path.metadatapath, path.streamname, datacommitwithmetadata.id.__str__())
+
+			metadatablob = self.revparse_single("%s:%s" % (metadatacommit.id, metadatablobpath))
 			if not isinstance(metadatablob, pygit2.Blob):
 				raise MetadataBlobNotFoundError("Could not find metadata blob in the tree")
 			else:
@@ -784,11 +937,12 @@ class MetadataRepository(pygit2.Repository):
 		except KeyError:
 			raise MetadataBlobNotFoundError("Could not find metadata blob in the tree")
 
+
 	def find_fs_blob_in_repository(self, path):
 		if os.path.isfile(path):
 			requestedblobid = pygit2.hashfile(path)  # Find the ID of the file so we can check if it's in repository
 			if (requestedblobid in self):            # Check if the file is in the repository
-				dataitem = self[requestedblobid]     # We found the file so save it for later
+				dataitem = self[requestedblobid]     # We found the file so return it
 				return dataitem
 
 		# If we reach here, it is a directory or it was not found on the file system
