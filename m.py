@@ -23,115 +23,6 @@ import re  # Regular expressions
 #   m get origin.pdf
 #   m get --key author origin.pdf
 
-# class ParsePathAction(argparse.Action):
-# 	branch_default = "metadata"
-# 	stream_default = "metadata"
-# 	path_default = os.getcwd()
-# 	syntax = "(metadatapath | [branch:]metadatapath:stream)"
-#
-# 	def __call__(self, parser, namespace, values, option_string=None):
-#
-# 		# Regular expression:
-# 		# first group can be blank (*) and is lazy (?), and is any char except ':'
-# 		# second group can be blank (*) to allow e.g. 'branch::metadata' for current directory, and is any char except ':'
-# 		# third group can be blank (*) and is lazy (?), and is any char except ':'
-# 		# Separating ':'s are optional to allow for branch and stream to be dropped to activate defaults
-# 		# dir                  = '', 'dir', ''
-# 		# branch:dir:metadata  = 'branch','dir','metadata'
-# 		# dir:metadata         = '','dir','metadata'
-# 		# branch::metadata     = 'branch','','metadata'
-# 		values_split = re.match(r'^([^:\r\n]*?):?([^:\r\n]*):?([^:\r\n]*?)$', values)
-#
-# 		# Wrong format received - possibly too many ':'s in string
-# 		if values_split is None:
-# 			parser.error("Could not parse '%s'. Please use syntax %s." % (values, ParsePathAction.syntax))
-#
-# 		branchname = values_split.group(1) or ParsePathAction.branch_default
-# 		path       = values_split.group(2) or ParsePathAction.path_default
-# 		streamname = values_split.group(3) or ParsePathAction.stream_default
-#
-# 		setattr(namespace, self.dest, values)
-# 		setattr(namespace, 'branchname', branchname)
-# 		setattr(namespace, 'metadatapath', path)
-# 		setattr(namespace, 'streamname', streamname)
-
-
-# class ParsePathAndStream(argparse.Action):
-# 	datarev_default = None
-# 	datarev_default_get = "HEAD"
-# 	stream_default = "metadata"
-# 	path_default = os.getcwd()
-# 	syntax = "datarev:metadatapath[:stream]"
-# 
-# 	def __call__(self, parser, namespace, values, option_string=None):
-# 
-# 		# Regular expression to parse the following expressions:
-# 		# dir                  = '', 'dir', ''
-# 		# branch:dir:metadata  = 'branch','dir','metadata'
-# 		# branch:dir         = 'branch','dir',''
-# 		# branch::metadata     = 'branch','','metadata'
-# 
-# 		
-# 		# Try branch:dir:metadata or branch:dir:'' first
-# 		values_split = re.match(r'^s(?:earch)?([-\+])([^:\r\n]*):([^:\r\n]*):?([^:\r\n]*)$', values)
-# 
-# 		# Next, if that didn't work, try just matching dir
-# 		if values_split is None:
-# 			values_split = re.match(r'^s(?:earch)?([-\+])():?([^:\r\n]*)()$', values)
-#  
-# 		# Wrong format received - possibly too many ':'s in string
-# 		if values_split is None:
-# 			parser.error("Could not parse '%s'. Please use syntax (s+|s-)%s." % (values, ParsePathAndStream.syntax))
-# 
-# 		searching = values_split.group(1)
-# 		datarev = values_split.group(2) or ParsePathAndStream.datarev_default
-# 		path       = values_split.group(3) or ParsePathAndStream.path_default
-# 		streamname = values_split.group(4) or ParsePathAndStream.stream_default
-# 
-# 		setattr(namespace, self.dest, values)
-# 		setattr(namespace, self.dest + '_datarev', datarev)
-# 		setattr(namespace, self.dest + '_metadatapath', path)
-# 		setattr(namespace, self.dest + '_streamname', streamname)
-# 
-# 		print searching
-# 		if searching in ["+"]:
-# 			setattr(namespace, self.dest + '_datarevsearchmethod', DataRevisionMetadataSearchMethod.SearchBackForEarlierMetadataAllowed)
-# 		elif searching in ["-"]:
-# 			setattr(namespace, self.dest + '_datarevsearchmethod', DataRevisionMetadataSearchMethod.UseRevisionSpecifiedOnly)
-# 		else:
-# 			parser.error("Please specify 's+' or 's-'")
-# 		
-
-
-# THIS ONE PARSES TWO PARTS:
-# class ParsePathAndStream(argparse.Action):
-# 	stream_default = "metadata"
-# 	path_default = os.getcwd()
-# 	syntax = "metadatapath[:stream]"
-#
-# 	def __call__(self, parser, namespace, values, option_string=None):
-#
-# 		# Regular expression:
-# 		# first group can be blank (*) to allow e.g. 'branch::metadata' for current directory, and is any char except ':'
-# 		# second group can be blank (*) and is lazy (?), and is any char except ':'
-# 		# Separating ':'s are optional to allow for branch and stream to be dropped to activate defaults
-# 		# dir                  = 'dir', ''
-# 		# dir:metadata         = 'dir','metadata'
-# 		# :metadata            = '','metadata'
-# 		values_split = re.match(r'^([^:\r\n]*):?([^:\r\n]*?)$', values)
-#
-# 		# Wrong format received - possibly too many ':'s in string
-# 		if values_split is None:
-# 			parser.error("Could not parse '%s'. Please use syntax %s." % (values, ParseDataRef.syntax))
-#
-# 		path       = values_split.group(1) or ParsePathAndStream.path_default
-# 		streamname = values_split.group(2) or ParsePathAndStream.stream_default
-#
-# 		setattr(namespace, self.dest, values)
-# 		setattr(namespace, 'metadatapath', path)
-# 		setattr(namespace, 'streamname', streamname)
-
-
 class ParseMetadataRef(argparse.Action):
 
 	def __call__(self, parser, namespace, values, option_string=None):
@@ -172,11 +63,6 @@ def parse_args():
 		default=False,
 		help="Verbose output")
 
-	# parser.add_argument('--rev',
-	# 					dest="datarev",
-	# 					default="HEAD",
-	# 					help="The revision for which to view metadata")
-
 	parser.add_argument(
 		'-m', '--metadataref',
 		dest='metadataref',
@@ -184,27 +70,11 @@ def parse_args():
 		default=MetadataRepository.metadataref_default,
 		help="A git reference to the metadata, e.g. 'metadata' or 'refs/heads/metadata'")
 
-	# parser_group = parser.add_mutually_exclusive_group(required=True)
-	#
-	# parser_group.add_argument('-p', '--previous',
-	# 					dest="previous",
-	# 					action="store_true",
-	# 					default=False,
-	# 					help="Look back in metadata history to find where committed")
-	#
-	# parser_group.add_argument('-b', '--branch',
-	# 					dest="previous",
-	# 					action="store_false",
-	# 					help="Do not look back in metadata history, use datarev to find metadata")
-
-	# parser.set_defaults(metadatafrom='metadataref')
-
 	# Add sub-parsers
 	subparsers = parser.add_subparsers()
 
 	parser_get = subparsers.add_parser('get')
 	parser_get.set_defaults(command=get)
-	parser_get.set_defaults(fileaction=FileActions.default)
 
 	parser_set = subparsers.add_parser('set')
 	parser_set.set_defaults(command=set)
@@ -227,56 +97,14 @@ def parse_args():
 	parser_ls = subparsers.add_parser('ls')
 	parser_ls.set_defaults(command=ls) 
 
-# 	parser_get.add_argument(
-# 		'datarevgetmethod',
-# 		choices=['searchback', 'nosearchback'],
-# 		action=ParseDataRevisionMetadataSearchMethod,
-# 		help="Search back for an earlier version of metadata for this file (searchback) or only display the metadata on the revision specified (nosearchback)")
-
 	# Set up 'get' subparser
 	parser_get.add_argument(
 		'path',
 		nargs="?",
 		default=os.getcwd(),
 		help="%s The path to the metadata object. The default branch and stream will be used if not specified." % MetadataPath.path_syntax)
-
-
-# 	parser_get.add_argument(
-# 		'--key',
-# 		help="The key to lookup")
-# 
-# 	parser_get.add_argument(
-# 		'--value',
-# 		help="The value it must have")
-
-# 	parser_get_group = parser_get.add_mutually_exclusive_group()
-# 	parser_get_group.add_argument(
-# 		'--dump',
-# 		dest='fileaction',
-# 		action='store_const',
-# 		const=FileActions.dump,
-# 		help='Do not parse the file in any way, just print it to stdout')
-# 
-# 	parser_get_group.add_argument(
-# 		'--json',
-# 		dest='fileaction',
-# 		action='store_const',
-# 		const=FileActions.json,
-# 		help='Parse the file as JSON and prettify the output')
-
-	# Set up 'set' subparser
-	# parser_set.add_argument('-d', '--datarev',
-	# 					dest='datarev',
-	# 					default=None,
-	# 					help='The revision for which to view metadata')
-
-# 	parser_set.add_argument(
-# 		'datarevupdatemethod',
-# 		choices=['searchback', 'nosearchback'],
-# 		action=ParseDataRevisionMetadataSearchMethod,
-# 		help="Search back for an earlier version of metadata for this file and update it (searchback) or only update the metadata on the revision specified leaving metadata on previous commits unaltered (nosearchback)")
-
-
+		
+	# Set up the 'set' subparser
 	parser_set.add_argument(
 		'path',
 		nargs="?",
@@ -291,12 +119,7 @@ def parse_args():
 		default=False,
 		help="Force any overwrites")
 
-	# Set up 'list' subparser
-	# parser_list.add_argument('-d', '--datarev',
-	# 					dest='datarev',
-	# 					default="HEAD",
-	# 					help='The revision for which to view metadata')
-
+	# Set up the 'list' subparser
 	parser_list.add_argument(
 		'path',
 		nargs="?",
@@ -304,6 +127,7 @@ def parse_args():
 		help="%s The path to the metadata object. The default branch and stream will be used if not specified." % MetadataPath.path_syntax)
 
 
+	# Set up the 'copy' subparser
 	parser_copy.add_argument(
 		'sourcepath',
 		nargs="?",
@@ -322,12 +146,24 @@ def parse_args():
 		default=False,
 		help="Force any overwrites")
 
+
+	# Set up the 'log' subparser
 	parser_log.add_argument(
 		'path',
 		nargs="?",
 		default=os.getcwd(),
 		help="%s The path to the metadata object. The default branch and stream will be used if not specified." % MetadataPath.path_syntax)
 
+
+	# Set up the 'ls' subparser
+	parser_ls.add_argument(
+		'path',
+		nargs="?",
+		default=os.getcwd(),
+		help="%s The path to the metadata object. The default branch and stream will be used if not specified." % MetadataPath.path_syntax)
+
+
+	# Set up the 'setvalue' subparser
 	parser_setvalue.add_argument(
 		'path',
 		nargs="?",
@@ -338,6 +174,8 @@ def parse_args():
 		'keyvaluepair',
 		help='Key value pair to add to metadata')
 
+
+	# Set up the 'getvalue' subparser
 	parser_getvalue.add_argument(
 		'path',
 		nargs="?",
@@ -349,51 +187,43 @@ def parse_args():
 		nargs="?",
 		help='Key value pair to add to metadata')
 
-	parser_ls.add_argument(
-		'path',
-		nargs="?",
-		default=os.getcwd(),
-		help="%s The path to the metadata object. The default branch and stream will be used if not specified." % MetadataPath.path_syntax)
 
 	args = parser.parse_args()
 
 	return args
 
 
-def get(args):
+def get(args, repo):
 
-# 	metapath = MetadataPath(args.path)
-	repopath = MetadataRepository.discover_repository(args.path, args.metadataref)
-	repo = MetadataRepository(repopath, debug=args.verbose)
-	sys.stdout.write(repo.get_metadata_blob(args.path).data)
-# 	repo = MetadataRepository(args.path_metadatapath, args.metadataref, debug=args.verbose)
-# 	repo.print_metadata(args.path_streamname, args.path_datarev, args.path_datarevsearchmethod, fileaction=args.fileaction, keyfilter=args.key, valuefilter=args.value)
+	metadatablob = repo.get_metadata_blob(args.path)
+	sys.stdout.write(metadatablob.data)
 
 
-def set(args):
-
-	repopath = MetadataRepository.discover_repository(args.path, args.metadataref)
-	repo = MetadataRepository(repopath, debug=args.verbose)
-	repo.save_metadata_blob(args.path, args.infile.read())
+def getvalue(args, repo):
 	
-# 	repo = MetadataRepository(args.path_metadatapath, args.metadataref, debug=args.verbose)
-# 	repo.update_metadata(k, v, args.path_streamname, args.path_datarev, args.path_datarevsearchmethod, force=args.force)
+	metadatablob = repo.get_metadata_blob(args.path)
+	data = json.loads(metadatablob.data)
+	for key, value in data.iteritems():
+		if (args.keyfilter is None or args.keyfilter == key.__str__()):
+			print '{:<20} {:<20}'.format(key, value)
 
 
-def setvalue(args):
+def set(args, repo):
+
+	repo.save_metadata_blob(args.path, args.infile.read())
+
+
+def setvalue(args, repo):
 	# Separate the key and value
 	k, sep, v = args.keyvaluepair.partition("=")
 
 	# Check keyvaluepair argument is correct format
 	if sep != "=":
 		raise KeyValuePairArgumentError(KeyValuePairArgumentError.__doc__)
-		
-	repopath = MetadataRepository.discover_repository(args.path, args.metadataref)
-	repo = MetadataRepository(repopath, debug=args.verbose)
 
 	try:
 		# Get the metadata
-		metadatablob = repo.get_metadata_blob2(args.path)
+		metadatablob = repo.get_metadata_blob(args.path)
 		jsondict = json.loads(metadatablob.data)
 	except (MetadataBlobNotFoundError, NoMetadataBranchError):
 		jsondict = json.loads("{}")
@@ -405,41 +235,24 @@ def setvalue(args):
 	newfile = json.dumps(jsondict)
 
 	commitid = repo.save_metadata_blob(args.path, newfile)
-	
-def getvalue(args):
-	
-	repopath = MetadataRepository.discover_repository(args.path, args.metadataref)
-	repo = MetadataRepository(repopath, debug=args.verbose)
-	metadata_container = repo.get_metadata_blob(args.path)
-	data = json.loads(metadata_container.data)
-	for key, value in data.iteritems():
-		if (args.keyfilter is None or args.keyfilter == key.__str__()):
-			print '{:<20} {:<20}'.format(key, value)
-	
-def list(args):
-# 	metadatapath = MetadataPath(args.path, path_has_search=False)
-	repopath = MetadataRepository.discover_repository(args.path, args.metadataref)
-	repo = MetadataRepository(repopath, debug=args.verbose)
+
+
+def list(args, repo):
+
 	repo.list_metadata_in_stream(args.path)
 
-# 	repo = MetadataRepository(args.path_metadatapath, args.metadataref, debug=args.verbose)
-# 	repo.list_metadata_in_stream(args.path_datarev, args.path_streamname)
 
+def log(args, repo):
 
-def log(args):
-	# 	metadatapath = MetadataPath(args.path, path_has_search=False)
-
-	# 	metadatapath = MetadataPath(args.path, path_requires_search=False)
-	repopath = MetadataRepository.discover_repository(args.path, args.metadataref)
-	repo = MetadataRepository(repopath, debug=args.verbose)
 	repo.log(args.path)
 
-def ls(args):
-	repopath = MetadataRepository.discover_repository(args.path, args.metadataref)
-	repo = MetadataRepository(repopath, debug=args.verbose)
+
+def ls(args, repo):
+
 	repo.list_metadata_objects()
 
-def copy(args):
+
+def copy(args, repo):
 
 	if args.verbose:
 		MetadataRepository.errormsg("** Parsed Arguments **")
@@ -454,11 +267,7 @@ def copy(args):
 		MetadataRepository.errormsg("stream        : " + args.destpath_streamname)
 		MetadataRepository.errormsg("")
 
-	repopath = MetadataRepository.discover_repository(args.path_metadatapath, args.metadataref)
-	repo = MetadataRepository(repopath, debug=args.verbose)
 	repo.copy_metadata(args.sourcepath, args.destpath, force=args.force)
-# 	repo = MetadataRepository(args.sourcepath_metadatapath, args.metadataref, debug=args.verbose)
-# 	repo.copy_metadata(args.sourcepath_streamname, args.sourcepath_datarev, args.destpath_streamname, args.destpath_datarev, args.sourcepath_metadatapath, args.destpath_metadatapath, args.destpath_datarevsearchmethod)
 
 
 if __name__ == "__main__":
@@ -468,7 +277,9 @@ if __name__ == "__main__":
 
 	# Execute the requested function
 	try:
-		args.command(args)
+		repopath = MetadataRepository.discover_repository(args.path, args.metadataref)
+		repo = MetadataRepository(repopath, debug=args.verbose)
+		args.command(args, repo)
 	except Exception, e:
 		if args.verbose:
 			traceback.print_exc()
