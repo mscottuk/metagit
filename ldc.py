@@ -731,7 +731,6 @@ class MetadataRepository(pygit2.Repository):
 		except MetadataBlobNotFoundError as e:
 			pass
 
-# 		print "-- -----------------------"
 		print
 		print "DM  {:40}  {:19}".format("Data commit ID:", "Data commit date:")
 		print "--  {:40}  {:19}".format("-" * 40, "-" * 19)
@@ -810,13 +809,6 @@ class MetadataRepository(pygit2.Repository):
 		metadatacommit = self.get_metadata_commit(self.metadataref)
 		
 		self.print_tree(metadatacommit.tree)
-# 		for f in metadatacommit.tree:
-# 			if (f.type == "tree"):
-# 				print "Tree " + f.name
-# 			elif (f.type == "blob"):
-# 				print "Blob " + f.name
-# 			else:
-# 				print "Other %s" % type(f)
 		
 
 	def find_path_in_repository(self, datarev, path):
@@ -915,9 +907,6 @@ class MetadataRepository(pygit2.Repository):
 		datacommit = self.get_data_commit(path.datarev)
 		datacommitid = datacommit.id.__str__()
 
-		# Generate the path from the object requested, stream name and revision
-# 		metadatablobpath = self.get_metadata_blob_path(path.metadatapath, path.streamname, datacommitid)
-
 		dataobject = self.revparse_single("%s:%s" % (path.datarev, path.metadatapath))
 		
 		datacommitwithmetadata = self.find_first_data_commit_with_metadata_for_blob(dataobject, datacommit, path)
@@ -927,6 +916,7 @@ class MetadataRepository(pygit2.Repository):
 
 		# Try to get the blob
 		try:
+			# Generate the path from the object requested, stream name and revision
 			metadatablobpath = self.get_metadata_blob_path(path.metadatapath, path.streamname, datacommitwithmetadata.id.__str__())
 
 			metadatablob = self.revparse_single("%s:%s" % (metadatacommit.id, metadatablobpath))
@@ -948,140 +938,3 @@ class MetadataRepository(pygit2.Repository):
 		# If we reach here, it is a directory or it was not found on the file system
 		raise DataBlobNotFoundError("Could not find data blob in repository")
 
-class MetadataRepository_old(pygit2.Repository):
-
-# 	def check_path_request(self, path):
-# 		"""Work out the path for the metadata request"""
-# 
-# 		# If no path was specified, use the default for the repository object
-# 		if path is None:
-# 			path = self.rel_req_path
-# 
-# 		# Remove start slash from the request as we start searching from the root anyway
-# 		if os.path.isabs(path):
-# 			path = path[1:]
-# 
-# 		return path
-
-
-	# def find_first_data_commit_with_tree(self, treepath, treeid, currentcommit):
-	# 	# DO WE REALLY LOSE THE METADATA WHEN THE CONTENTS OF THE DIRECTORY CHANGE?
-	# 	# PERHAPS USING THE PATH RATHER THAN THE TREEID IS BETTER?
-	# 	if len(currentcommit.parents) > 1:
-	# 		raise MetadataReadError("Merges not supported")
-	# 	elif len(currentcommit.parents) == 0:
-	# 		# No parent so current commit is the first to contain this tree
-	# 		return currentcommit
-	# 	else:
-	# 		parentcommit = currentcommit.parents[0]
-	#
-	# 		try:
-	# 			treefound = self.revparse_single("%s:%s" % (parentcommit, treepath))
-	# 			if not isinstance(treefound, pygit2.Tree):
-	# 				# Tree was updated (it used to be a blob)
-	# 				return currentcommit
-	# 			if treefound.id == treeid:
-	# 				# Try next one
-	# 				return self.find_first_data_commit_with_tree(treepath, parentcommit)
-	# 			else:
-	# 				# Tree was updated
-	# 				return currentcommit
-	# 		except KeyError:
-	# 			# Tree could not be found
-	# 			return currentcommit
-
-	def update_metadata(self, k, v, streamname, datarev, datarevupdatemethod, path=None, force=False):
-		path = self.check_path_request(path)
-
-		# Check the data revision supplied.
-		# If the user specified None, we need to find the latest metadata for this path and ensure the
-		# data hash matches (otherwise it's not committed).
-		# What happens if it is a new version of the file that has been committed but has no metadata yet?
-		# ...we don't know whether to update earlier commit or update specified commit.
-		# ---> So, a set command must always specify the behaviour otherwise unexpected things might happen.
-		if datarev is None:
-			datarev = self.generate_datarev(path)
-			# If we get here then the file or folder exists in the HEAD commit
-
-		# Find the data commit
-		if datarevupdatemethod == DataRevisionMetadataSearchMethod.SearchBackForEarlierMetadataAllowed:
-			datacommitwithobject = self.find_data_commit_with_object(datarev, path)
-		elif datarevupdatemethod == DataRevisionMetadataSearchMethod.UseRevisionSpecifiedOnly:
-			datacommitwithobject = self.get_data_commit(datarev)
-		else:
-			raise ParameterError("Data revision update method required")
-
-		datacommitwithobjectid = datacommitwithobject.id.__str__()
-
-		MetadataRepository.errormsg("'{}' has been found in data commit {}".format(path, datacommitwithobjectid))
-		metadatablobpath = self.get_metadata_blob_path(path, streamname, datacommitwithobjectid)
-		MetadataRepository.errormsg("Metadata will be updated at path %s" % metadatablobpath)
-
-		try:
-			# Get the metadata
-			metadatablob = self.get_metadata_blob(streamname, datacommitwithobjectid, path=path)
-			jsondict = json.loads(metadatablob.data)
-		except (MetadataBlobNotFoundError, NoMetadataBranchError):
-			jsondict = json.loads("{}")
-
-		# Update dictionary
-		jsondict[k] = v
-
-		# Create an object to save in the repository
-		newfile = json.dumps(jsondict)
-
-		commitid = self.save_metadata_blob(newfile, streamname, datacommitwithobjectid, path=path, force=force)
-
-	def print_metadata(self, streamname, datarev, datarevgetmethod, path=None, fileaction=FileActions.dump, keyfilter=None, valuefilter=None):
-		path = self.check_path_request(path)
-
-		# Please note that if we set the datarev to the new default of HEAD, to know whether
-		# data has changed between the metadata's commit, we need to know the
-		# requested data and the metadata's actual data commit. For example, if the user specified None:file1
-		# then we will look up metadata in HEAD:file1.txt, we will need to check whether file1.txt
-		# has changed in the working directory because the user did not explicitly specify HEAD:file1.txt.
-		# However, if the user did specify HEAD:file1.txt we can then lookup the metadata for that
-		# version of the file.
-
-		if datarev is None:
-			datarev = self.generate_datarev(path)
-			# If we get here then the file or folder exists in the HEAD commit
-
-		try:
-			metadata_container = self.get_metadata_blob(streamname, datarev, path=path)
-		except MetadataBlobNotFoundError:
-			if datarevgetmethod == DataRevisionMetadataSearchMethod.SearchBackForEarlierMetadataAllowed:
-				# Get the data commit
-				datacommitwithobject = self.find_data_commit_with_object(datarev, path)
-				datacommitwithobjectid = datacommitwithobject.id.__str__()
-
-				# Get the metadata
-				metadata_container = self.get_metadata_blob(streamname, datacommitwithobjectid, path=path)
-			else:
-				raise
-
-		if FileActions.is_action(fileaction, FileActions.json):
-			try:
-				self.printjson(metadata_container, keyfilter, valuefilter)
-			except ValueError:
-				if FileActions.is_action(fileaction, FileActions.dump):
-					self.dumpfile(metadata_container.metadatablob)
-				else:
-					raise MetadataFileFormatError("Not JSON data. Use --dump to show file anyway.")
-		elif FileActions.is_action(fileaction, FileActions.dump):
-			self.dumpfile(metadata_container)
-
-		# if metadata_container.datablob is None:
-		# 	print TextColor.Red + 'NOTE: Matching data not found' + TextColor.Reset
-		#
-		# if metadata_container.datachanged:
-		# 	print TextColor.Red + "NOTE: Data has been modified" + TextColor.Reset
-
-	def printjson(self, gitblob, keyfilter=None, valuefilter=None):
-		data = json.loads(gitblob.data)
-		for key, value in data.iteritems():
-			if (keyfilter is None or keyfilter == key.__str__()) and (valuefilter is None or valuefilter == value.__str__()):
-				print '{:<20} {:<20}'.format(key, value)
-
-	def dumpfile(self, gitblob):
-		print gitblob.data
