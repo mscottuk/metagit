@@ -286,3 +286,4 @@ if __name__ == "__main__":
 		else:
 			exc_type, exc_obj, exc_tb = sys.exc_info()
 			MetadataRepository.errormsg("%s: %s" % (exc_type.__name__, exc_obj))
+		sys.exit(1)
