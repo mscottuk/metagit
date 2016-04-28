@@ -4,7 +4,7 @@ import os
 import sys
 import json
 import argparse
-from ldc import *
+from metagit import *
 import traceback
 import re  # Regular expressions
 
