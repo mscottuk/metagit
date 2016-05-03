@@ -51,18 +51,18 @@ class ParseMetadataRef(argparse.Action):
 		setattr(namespace, self.dest, metadataref)
 
 
-class ParseDataRevisionMetadataSearchMethod(argparse.Action):
-
-	def __call__(self, parser, namespace, values, option_string=None):
-
-		# Check if we have an absolute reference path passed
-		if values == "searchback":
-			setattr(namespace, self.dest, DataRevisionMetadataSearchMethod.SearchBackForEarlierMetadataAllowed)
-		elif values == "nosearchback":
-			# We don't have one so generate it
-			setattr(namespace, self.dest, DataRevisionMetadataSearchMethod.UseRevisionSpecifiedOnly)
-		else:
-			parser.error("Please specify 'searchback' or 'nosearchback'")
+# class ParseDataRevisionMetadataSearchMethod(argparse.Action):
+# 
+# 	def __call__(self, parser, namespace, values, option_string=None):
+# 
+# 		# Check if we have an absolute reference path passed
+# 		if values == "searchback":
+# 			setattr(namespace, self.dest, DataRevisionMetadataSearchMethod.SearchBackForEarlierMetadataAllowed)
+# 		elif values == "nosearchback":
+# 			# We don't have one so generate it
+# 			setattr(namespace, self.dest, DataRevisionMetadataSearchMethod.UseRevisionSpecifiedOnly)
+# 		else:
+# 			parser.error("Please specify 'searchback' or 'nosearchback'")
 
 
 def parse_args():
@@ -107,6 +107,10 @@ def parse_args():
 	parser_getvalue = subparsers.add_parser('getvalue')
 	parser_getvalue.set_defaults(command=getvalue)
 	
+	parser_setdata = subparsers.add_parser('setdata')
+	parser_setdata.set_defaults(command=setdata)
+
+	
 	parser_ls = subparsers.add_parser('ls')
 	parser_ls.set_defaults(command=ls) 
 
@@ -142,7 +146,7 @@ def parse_args():
 
 	# Set up the 'copy' subparser
 	parser_copy.add_argument(
-		'sourcepath',
+		'path',
 		nargs="?",
 		default=os.getcwd(),
 		help="%s The path to the metadata object. The default branch and stream will be used if not specified." % MetadataPath.path_syntax)
@@ -200,6 +204,17 @@ def parse_args():
 		nargs="?",
 		help='Key value pair to add to metadata')
 
+	# Set up the 'setdata' subparser
+	parser_setdata.add_argument(
+		'path',
+		nargs="?",
+		default=os.getcwd(),
+		help="%s The path to the metadata object. The default branch and stream will be used if not specified." % MetadataPath.path_syntax)
+
+	parser_setdata.add_argument(
+		'data',
+		help='Data to add to metadata')
+
 
 	args = parser.parse_args()
 
@@ -249,6 +264,8 @@ def setvalue(args, repo):
 
 	commitid = repo.save_metadata_blob(args.path, newfile)
 
+def setdata(args, repo):
+	repo.save_metadata_blob(args.path, args.data)
 
 def list(args, repo):
 
@@ -267,26 +284,29 @@ def ls(args, repo):
 
 def copy(args, repo):
 
-	if args.verbose:
-		MetadataRepository.errormsg("** Parsed Arguments **")
-		MetadataRepository.errormsg("Unparsed path : '%s'" % args.sourcepath)
-		MetadataRepository.errormsg("datarev       : %s" % args.sourcepath_datarev)
-		MetadataRepository.errormsg("metadatapath  : " + args.sourcepath_metadatapath)
-		MetadataRepository.errormsg("stream        : " + args.sourcepath_streamname)
-		MetadataRepository.errormsg("")
-		MetadataRepository.errormsg("Unparsed path : '%s'" % args.destpath)
-		MetadataRepository.errormsg("datarev       : %s" % args.destpath_datarev)
-		MetadataRepository.errormsg("metadatapath  : " + args.destpath_metadatapath)
-		MetadataRepository.errormsg("stream        : " + args.destpath_streamname)
-		MetadataRepository.errormsg("")
+# 	if args.verbose:
+# 		MetadataRepository.errormsg("** Parsed Arguments **")
+# 		MetadataRepository.errormsg("Unparsed path : '%s'" % args.path)
+# 		MetadataRepository.errormsg("datarev       : %s" % args.path_datarev)
+# 		MetadataRepository.errormsg("metadatapath  : " + args.path_metadatapath)
+# 		MetadataRepository.errormsg("stream        : " + args.path_streamname)
+# 		MetadataRepository.errormsg("")
+# 		MetadataRepository.errormsg("Unparsed path : '%s'" % args.destpath)
+# 		MetadataRepository.errormsg("datarev       : %s" % args.destpath_datarev)
+# 		MetadataRepository.errormsg("metadatapath  : " + args.destpath_metadatapath)
+# 		MetadataRepository.errormsg("stream        : " + args.destpath_streamname)
+# 		MetadataRepository.errormsg("")
 
-	repo.copy_metadata(args.sourcepath, args.destpath, force=args.force)
+	repo.copy_metadata(args.path, args.destpath, force=args.force)
 
 
 if __name__ == "__main__":
 
 	# Parse the passed arguments, exiting if an unexpected error occurs
 	args = parse_args()
+	
+	if args.verbose:
+		MetadataRepository.errormsg("Unparsed path : '%s'" % args.path)
 
 	# Execute the requested function
 	try:
