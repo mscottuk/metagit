@@ -278,22 +278,18 @@ class MetadataRepository(pygit2.Repository):
 			metadatareftoupdate = None
 			commitparentids = []
 
-		# Save the object into the repository
-		newblobid = self.create_blob(newdata)
-
 		# Find the data commit
-		datacommit = self.get_data_commit(path.datarev)
-		dataobject = self.revparse_single("%s:%s" % (path.datarev, path.metadatapath))	
-		datacommitwithmetadata = self.find_first_data_commit_with_metadata_for_blob(dataobject, datacommit, path)
-		
+		datacommitwithmetadata = self.find_data_commit_with_metadata(path, returncommitwhennometadata=True)
+
 		# If we don't have a data commit then metadata must not be defined and first commit could not be found
 		if datacommitwithmetadata is None:
 			raise MetadataBlobNotFoundError("Could not find metadata blob in the tree")
 
-		datacommitwithmetadataid = datacommitwithmetadata.id.__str__()
+		# Save the object into the repository
+		newblobid = self.create_blob(newdata)
 
 		# Save metadata tree
-		parentspath = self.get_metadata_blob_path(path.metadatapath, path.streamname, datacommitwithmetadataid)
+		parentspath = self.get_metadata_blob_path(path.metadatapath, path.streamname, datacommitwithmetadata.id.__str__())
 		parentslist = parentspath.split(os.sep)
 		toptreeid = self.write_tree_hierarchy(parentslist, newblobid, force=force)
 
@@ -305,14 +301,51 @@ class MetadataRepository(pygit2.Repository):
 			"Updated metadata for " + path.metadatapath,
 			toptreeid,
 			commitparentids)
+		self.debugmsg("Commit %s created." % (commitid))
 
+		# Create a reference if one doesn't exit
 		if metadatareftoupdate is None:
 			head_ref = self.create_reference(self.metadataref, commitid)
+			self.debugmsg("Reference '%s' created" % self.metadataref)
 
-		self.debugmsg("Commit %s created." % (commitid))
-		print "Metadata for '%s:%s' saved to stream '%s' in '%s' branch" % (datacommitwithmetadataid, path.metadatapath, path.streamname, self.metadataref)
+		print "Metadata for '%s:%s' saved to stream '%s' in '%s' branch" % (datacommitwithmetadata.id, path.metadatapath, path.streamname, self.metadataref)
 
 		return commitid
+
+	def find_metadata_blob(self, pathreq):
+
+		# Parse path parameter
+		path = self.parse_path_parameter(pathreq, fixdatarev=True)
+
+		# Find metadata branch
+		metadatacommit = self.get_metadata_commit(self.metadataref)
+
+		# Find the data commit with the metadata
+		datacommitwithmetadata = self.find_data_commit_with_metadata(path, returncommitwhennometadata=False)
+
+		if datacommitwithmetadata is None:
+			raise MetadataBlobNotFoundError("Could not find metadata blob in the tree")
+
+		# Get the blob
+		return self.get_metadata_blob(path.metadatapath, path.streamname, datacommitwithmetadata.id.__str__())
+
+	def get_metadata_blob(self, metadatapath, streamname, datacommitwithmetadata):
+		# Find metadata branch
+		metadatacommit = self.get_metadata_commit(self.metadataref)
+
+		# Generate the path from the object requested, stream name and revision
+		metadatablobpath = self.get_metadata_blob_path(metadatapath, streamname, datacommitwithmetadata)
+
+		# Try to get the blob
+		try:
+			# Get the blob
+			metadatablob = self.revparse_single("%s:%s" % (metadatacommit.id, metadatablobpath))
+			if not isinstance(metadatablob, pygit2.Blob):
+				raise MetadataBlobNotFoundError("Could not find metadata blob in the tree")
+			else:
+				return metadatablob
+		except KeyError:
+			raise MetadataBlobNotFoundError("Could not find metadata blob in the tree")
 
 	def copy_metadata(self, sourcepathreq, destpathreq, force=False):
 
@@ -328,333 +361,26 @@ class MetadataRepository(pygit2.Repository):
 		if source.datarev is None or dest.datarev is None or source.metadatapath is None or dest.metadatapath is None:
 			raise ParameterError("Source datarev and dest datarev must be specified for copy")
 
-		# Find the data commit
-		if source.datarevsearchmethod == DataRevisionMetadataSearchMethod.SearchBackForEarlierMetadataAllowed:
-			sourcedatacommitwithobject = self.find_data_commit_with_object(source.datarev, source.metadatapath)
-		elif source.datarevsearchmethod == DataRevisionMetadataSearchMethod.UseRevisionSpecifiedOnly:
-			sourcedatacommitwithobject = self.get_data_commit(source.datarev)
-		else:
-			raise ParameterError("Data revision update method required")
-		
-		if dest.datarevsearchmethod == DataRevisionMetadataSearchMethod.SearchBackForEarlierMetadataAllowed:
-			destdatacommitwithobject = self.find_data_commit_with_object(dest.datarev, dest.metadatapath)
-		elif dest.datarevsearchmethod == DataRevisionMetadataSearchMethod.UseRevisionSpecifiedOnly:
-			destdatacommitwithobject = self.get_data_commit(dest.datarev)
-		else:
-			raise ParameterError("Data revision update method required")
-		
-		sourcedatacommitwithobjectid = sourcedatacommitwithobject.id.__str__()
-		destdatacommitwithobjectid = destdatacommitwithobject.id.__str__()
+		# We could just use find_metadata_blob but we will not know which commit was used,
+		# so we will look it up ourselves so we can report it
+		sourcedatacommitwithobject = self.find_data_commit_with_metadata(source, returncommitwhennometadata=False)
+		# destdatacommitwithobject = self.find_data_commit_with_metadata(dest, returncommitwhennometadata=True)
 
-		MetadataRepository.errormsg("'{}' has been found in data commit {}".format(source.metadatapath, sourcedatacommitwithobjectid))
-		sourcemetadatablobpath = self.get_metadata_blob_path(source.metadatapath, source.streamname, sourcedatacommitwithobjectid)
-		destmetadatablobpath = self.get_metadata_blob_path(dest.metadatapath, dest.streamname, destdatacommitwithobjectid)
-		MetadataRepository.errormsg("Metadata will be copied from '{}' to '{}'".format(sourcemetadatablobpath, destmetadatablobpath))
+		# Raise an error if we couldn't find the data commits
+		if sourcedatacommitwithobject is None:
+			raise MetadataBlobNotFoundError("Could not find metadata blob in the tree")
+
+		sourcemetadatablobpath = self.get_metadata_blob_path(source.metadatapath, source.streamname, sourcedatacommitwithobject.id.__str__())
+		# destmetadatablobpath = self.get_metadata_blob_path(dest.metadatapath, dest.streamname, destdatacommitwithobject.id.__str__())
+		MetadataRepository.errormsg("'{}' metadata will be copied from '{}'".format(source.metadatapath, sourcemetadatablobpath))
 
 		# Get the metadata, not handling any exceptions if the blob is not found
-		#sourcemetadatablob = self.get_metadata_blob(sourcestreamname, sourcedatacommitwithobjectid, path=sourcepath)
+		sourcemetadatablob = self.get_metadata_blob(source.metadatapath, source.streamname, sourcedatacommitwithobject.id.__str__())
 
-		#newcommitid = self.save_metadata_blob(sourcemetadatablob, deststreamname, destdatacommitwithobjectid, path=destpath, force=force)
+		# Save the existing blob
+		newcommitid = self.save_metadata_blob(destpathreq, sourcemetadatablob, force=force)
 
-	def get_data_commit(self, datarev):
-		try:
-			commit = self.revparse_single(datarev)
-			if not isinstance(commit, pygit2.Commit):
-				raise NoDataError("Could not find matching data " + datarev)
-			else:
-				return commit
-		except KeyError:
-			raise NoDataError("Could not find matching data " + datarev)
-
-	def get_metadata_commit(self, metadataref):
-		try:
-			metadatacommit = self.revparse_single(metadataref)
-			if not isinstance(metadatacommit, pygit2.Commit):
-				raise MetadataCommitNotFoundError("Expected Commit for reference %s" % metadataref)
-			else:
-				return metadatacommit
-		except KeyError:
-			raise NoMetadataBranchError("No metadata could be found")
-
-	def parse_path_parameter(self, pathreq, fixdatarev=False, path_requires_search=True):
-		path = MetadataPath(pathreq, path_requires_search=path_requires_search, repo=self)
-
-		# Please note that if we set the datarev to the new default of HEAD, to know whether
-		# data has changed between the metadata's commit, we need to know the
-		# requested data and the metadata's actual data commit. For example, if the user specified None:file1
-		# then we will look up metadata in HEAD:file1.txt, we will need to check whether file1.txt
-		# has changed in the working directory because the user did not explicitly specify HEAD:file1.txt.
-		# However, if the user did specify HEAD:file1.txt we can then lookup the metadata for that
-		# version of the file.
-		if fixdatarev and path.datarev is None:
-			path.datarev = self.generate_datarev(path)
-			MetadataRepository.errormsg("NOTE: Data revision not specified. Assuming '{}'.".format(path.datarev))
-			# If we get here then the file or folder exists in the HEAD commit
-			
-		return path
-
-	# The metadata node is the path to the beginning of the metadata and contains streams and blobs
-	def get_metadata_node_path(self, path):
-		metadatanodepath = os.path.join(path, MetadataRepository.metadata_name)
-		self.debugmsg("metadata node path = " + metadatanodepath)
-		return metadatanodepath
-
-	# The metadata stream is the path to the tree containing metadata blobs for each commit
-	def get_metadata_stream_path(self, path, streamname):
-		metadatanodepath = self.get_metadata_node_path(path)
-		metadatastreampath = os.path.join(metadatanodepath, streamname)
-		self.debugmsg("metadata stream path = " + metadatastreampath)
-		return metadatastreampath
-	
-	# The metadata blob contains the metadata for a particular path, stream and data commit
-	def get_metadata_blob_path(self, path, streamname, datacommitid):
-		# metadatadatacommitid = self.find_latest_commitid_in_metadata(branchname, self.datarootcommit)
-		metadatanodepath = self.get_metadata_stream_path(path, streamname)
-		metadatablobpath = os.path.join(metadatanodepath, datacommitid)
-		self.debugmsg("metadata blob path = " + metadatablobpath)
-		return metadatablobpath
-
-	def generate_datarev(self, path):
-		if not isinstance(path, MetadataPath):
-			raise ParameterError("Passed path was not an instance of MetadataPath")
-		
-		if path.repo is None:
-			raise ParameterError("Passed a path without a repo")
-
-		datarev = MetadataPath.datarev_default_get
-		abspath = os.path.join(path.repo.workdir, path.metadatapath)
-		if os.path.isfile(abspath):
-			# Check what the status of the file is
-			status = self.status_file(path.metadatapath)
-
-			if status > pygit2.GIT_STATUS_CURRENT:
-				raise MetadataInvalidError("File has been modified but not committed so this metadata is not valid. Use '{}:{}' syntax to see metadata.".format(datarev, path.metadatapath))
-		elif os.path.isdir(abspath):
-			# Try to find the directory in the revision specified
-			try:
-				expectedtree = self.revparse_single('%s:%s' % (datarev, path.metadatapath))
-				if not isinstance(expectedtree, pygit2.Tree):
-					raise ParameterError("Path does not exist and data revision not specified")
-			except KeyError:
-				raise ParameterError("Path does not exist and data revision not specified")
-		else:
-			# If it wasn't a file or a directory, report an error
-			raise ParameterError("Path does not exist and data revision not specified")
-
-		# If we get here then the file or folder exists in the HEAD commit
-		return datarev
-
-	def write_tree_hierarchy(self, parentslist, newentryid, force=False):
-		newentry = self[newentryid]
-
-		# Get last entry as name of tree to save (work backwards in tree list)
-		newentryname = parentslist[-1]
-
-		# Use remaining entries as the parent tree's path
-		# Python does the right thing here for most strings and lists so no need to check the length of parentslist
-		newentryparentpath = os.sep.join(parentslist[0:-1])
-
-		self.debugmsg("Looking for %s/%s" % (newentryparentpath, newentryname))
-
-		try:
-			tree = self.revparse_single('{0}:{1}'.format(self.metadataref, newentryparentpath))
-			if isinstance(tree, pygit2.Tree):
-				# Found existing tree so modify it
-				treebuilder = self.TreeBuilder(tree)
-			else:
-				# Didn't find a try so check if we are allowed to overwrite it
-				if force:
-					# Create new tree
-					treebuilder = self.TreeBuilder()
-				else:
-					raise Exception("Expected Tree, got " + str(type(tree)))
-
-		except KeyError:
-			# Tree doesn't exist so create a new one
-			treebuilder = self.TreeBuilder()
-
-		if isinstance(newentry, pygit2.Blob):
-			self.debugmsg("Writing blob")
-			# Create a new tree with the blob in it, editing the last tree in the path if it exists.
-			treebuilder.insert(newentryname, newentry.id, pygit2.GIT_FILEMODE_BLOB)
-		elif isinstance(newentry, pygit2.Tree):
-			self.debugmsg("Writing tree")
-			# Create a new tree which points to the blob's tree, editing the last but one tree in the path if it exists.
-			treebuilder.insert(newentryname, newentry.id, pygit2.GIT_FILEMODE_TREE)
-		else:
-			raise Exception("Expected Blob or Tree, got " + str(type(newentry)))
-
-		treebuilderid = treebuilder.write()
-
-		self.debugmsg("Tree containing %s saved with ID %s" % (newentryname, treebuilderid.__str__()))
-
-		# If we're on the last one, len(parentslist) will be 1
-		if len(parentslist) > 1:
-			# Recurse up the tree, pass modified tree to next call of function
-			return self.write_tree_hierarchy(parentslist[0:-1], treebuilderid, force)
-		else:
-			return treebuilderid
-
-	# COPY FUNCTIONS
-	def find_data_commit_with_object(self, datarev, path):
-		datacommit = self.revparse_single(datarev)
-		if not isinstance(datacommit, pygit2.Commit):
-			raise NoDataError("Data commit does not exist")
-
-		try:
-			objectatpath = self.revparse_single("%s:%s" % (datarev, path))
-		except KeyError:
-			raise NoDataError("Data does not exist in commit")
-
-		if isinstance(objectatpath, pygit2.Blob):
-			datacommitwithobject = self.find_first_data_commit_with_blob(objectatpath, datacommit)
-		elif isinstance(objectatpath, pygit2.Tree):
-			datacommitwithobject = self.find_first_data_commit_with_tree(path, datacommit)
-		else:
-			raise NoDataError("Data does not exist in commit")
-
-		if datacommitwithobject is None:
-			raise NoDataError("Data does not exist in repository")
-
-		return datacommitwithobject
-
-	# Given a path, we compare the parent commit to the current commit to see if this was
-	# the commit where the tree was added. If not added at this commit, we call ourselves with the parent
-	# commit to check if the tree was added in the parent, and so on until there are no more parents.
-	# It is assumed that the tree is in the current commit when first called, otherwise this would have to be
-	# checked with a revparse_single for each call which would slow down the routine
-	def find_first_data_commit_with_tree(self, treepath, currentcommit):
-	
-		if len(currentcommit.parents) > 1:
-			raise MetadataReadError("Merges not supported")
-		elif len(currentcommit.parents) == 0:
-			# No parent so current commit is the first to contain this tree
-			return currentcommit
-		else:
-			parentcommit = currentcommit.parents[0]
-
-			try:
-				treefound = self.revparse_single("%s:%s" % (parentcommit.id, treepath))
-				if not isinstance(treefound, pygit2.Tree):
-					# Tree was updated (it used to be a blob)
-					return currentcommit
-				else:
-					# Try next one
-					return self.find_first_data_commit_with_tree(treepath, parentcommit)
-			except KeyError:
-				# Tree could not be found in the parent, so current commit is the first to contain this tree
-				return currentcommit
-
-	# Given a data object and a commit, we compare the parent commit to the current commit to see
-	# if this was the commit where the blob was added. If not added at this commit, we
-	# call ourselves with the parent commit to check if the blob was added in the parent,
-	# and so on until there are no more parents. It is assumed that the data object is in the current commit
-	# when first called otherwise this would have to be checked with a revparse_single for each call
-	# which would slow down the routine.
-	def find_first_data_commit_with_blob(self, dataobject, currentcommit):
-		currenttree = currentcommit.tree
-
-		self.debugmsg("looking for %s in %s" % (dataobject.id, currentcommit.id))
-
-		if len(currentcommit.parents) > 1:
-			raise MetadataReadError("Merges not supported")
-		elif len(currentcommit.parents) == 1:
-			# Compare against the commit's parent
-			parentcommit = currentcommit.parents[0]
-			diff = currenttree.diff_to_tree(parentcommit.tree, swap=True)
-		else:
-			# No parent commit to compare against so we will see what has been added in the first commit
-			parentcommit = None
-			diff = currenttree.diff_to_tree(swap=True)
-
-		# Check each change in the diff to see if we can find where our object was added
-		for patch in diff:
-			delta = patch.delta
-			if (delta.new_file.id == dataobject.id) \
-				and (delta.status & pygit2.GIT_DELTA_ADDED == pygit2.GIT_DELTA_ADDED):
-				return currentcommit
-
-		# Could not find the blob so check the next commit
-		if parentcommit is not None:
-			return self.find_first_data_commit_with_blob(dataobject, parentcommit)
-		else:
-			return None
-
-	# Find metadata for path, working backwards through commits starting from passed data commit ID
-	# It is assumed that the data object was is in the current commit when first called.
-	def find_first_data_commit_with_metadata_for_blob(self, dataobject, currentcommit, path):
-		# check metadata exists in current commit. if metadata exists, return current commit, else recurse
-		
-		if not isinstance(path, MetadataPath):
-			raise ParameterError("Passed path was not an instance of MetadataPath")
-
-		# Better check the blob exists in the current commit first
-		try:
-			dataobjectcheck = self.revparse_single("%s:%s" % (currentcommit.id, path.metadatapath))
-			objectsaretrees = isinstance(dataobject, pygit2.Tree) and isinstance(dataobjectcheck, pygit2.Tree)
-			if dataobjectcheck.id != dataobject.id and not objectsaretrees:# ID is different if it is a tree so ignore if tree
-				raise ParameterError("Data object does not match at commit specified")
-		except KeyError:
-			raise ParameterError("Data object does not exist at commit specified")
-
-		# We assume the object exists, check if it has metadata
-		try:
-			# Try to get the metadata
-			metadatablobpath = self.get_metadata_blob_path(path.metadatapath, path.streamname, currentcommit.id.__str__())
-			
-			# Find metadata branch
-			metadatacommit = self.get_metadata_commit(self.metadataref)
-			
-			# Find metadata blob
-			metadatablob = self.revparse_single("%s:%s" % (metadatacommit.id, metadatablobpath))
-			if not isinstance(metadatablob, pygit2.Blob):
-				raise MetadataBlobNotFoundError("Something wrong with the metadata at " + metadatablobpath)
-			else:
-				# Found it, return this commit
-				return currentcommit
-
-		# Metadata was not added at this commit so look in parents...
-		except KeyError:
-
-			if path.datarevsearchmethod != DataRevisionMetadataSearchMethod.SearchBackForEarlierMetadataAllowed:
-				return None
-			if len(currentcommit.parents) > 1:
-				raise MetadataReadError("Merges not supported")
-			elif len(currentcommit.parents) == 1:
-				# Compare against the commit's parent
-				parentcommit = currentcommit.parents[0]
-				diff = currentcommit.tree.diff_to_tree(parentcommit.tree, swap=True)
-			else:
-				# No parent commit to compare against so we will see what has been added in the first commit
-				parentcommit = None
-				diff = currentcommit.tree.diff_to_tree(swap=True)
-
-			# Check each change in the diff to see if we can find where our object was added
-			for patch in diff:
-				delta = patch.delta
-				if (delta.new_file.id == dataobject.id) \
-					and (delta.status & pygit2.GIT_DELTA_ADDED == pygit2.GIT_DELTA_ADDED):
-					# Metadata added in current commit so do not proceed any further back and return current commit
-					return currentcommit
-
-			# check blob exists in parent commit by checking ID and path
-			try:
-				if parentcommit is None:
-					return None
-				else:
-					objectatpath = self.revparse_single("%s:%s" % (parentcommit.id, path.metadatapath))
-					objectsaretrees = isinstance(dataobject, pygit2.Tree) and isinstance(objectatpath, pygit2.Tree)
-					# Data object doesn't exist so return None because we have reached a commit we cannot go past
-					if objectatpath.id != dataobject.id and not objectsaretrees:
-						return None
-					else:
-						# Check the next parent for metadata
-						return self.find_first_data_commit_with_metadata_for_blob(dataobject, parentcommit, path)
-			
-			# Data object doesn't exist in parent so return None
-			except KeyError:
-				return None
-
+		return newcommitid
 
 	# LIST FUNCTIONS
 	def list_metadata_in_stream(self, pathreq):
@@ -858,6 +584,319 @@ class MetadataRepository(pygit2.Repository):
 		self.print_tree(metadatacommit.tree)
 		
 
+
+	def get_data_commit(self, datarev):
+		try:
+			commit = self.revparse_single(datarev)
+			if not isinstance(commit, pygit2.Commit):
+				raise NoDataError("Could not find matching data " + datarev)
+			else:
+				return commit
+		except KeyError:
+			raise NoDataError("Could not find matching data " + datarev)
+
+	def get_metadata_commit(self, metadataref):
+		try:
+			metadatacommit = self.revparse_single(metadataref)
+			if not isinstance(metadatacommit, pygit2.Commit):
+				raise MetadataCommitNotFoundError("Expected Commit for reference %s" % metadataref)
+			else:
+				return metadatacommit
+		except KeyError:
+			raise NoMetadataBranchError("No metadata could be found")
+
+	def parse_path_parameter(self, pathreq, fixdatarev=False, path_requires_search=True):
+		path = MetadataPath(pathreq, path_requires_search=path_requires_search, repo=self)
+
+		# Please note that if we set the datarev to the new default of HEAD, to know whether
+		# data has changed between the metadata's commit, we need to know the
+		# requested data and the metadata's actual data commit. For example, if the user specified None:file1
+		# then we will look up metadata in HEAD:file1.txt, we will need to check whether file1.txt
+		# has changed in the working directory because the user did not explicitly specify HEAD:file1.txt.
+		# However, if the user did specify HEAD:file1.txt we can then lookup the metadata for that
+		# version of the file.
+		if fixdatarev and path.datarev is None:
+			path.datarev = self.generate_datarev(path)
+			MetadataRepository.errormsg("NOTE: Data revision not specified. Assuming '{}'.".format(path.datarev))
+			# If we get here then the file or folder exists in the HEAD commit
+			
+		return path
+
+	# The metadata node is the path to the beginning of the metadata and contains streams and blobs
+	def get_metadata_node_path(self, path):
+		metadatanodepath = os.path.join(path, MetadataRepository.metadata_name)
+		self.debugmsg("metadata node path = " + metadatanodepath)
+		return metadatanodepath
+
+	# The metadata stream is the path to the tree containing metadata blobs for each commit
+	def get_metadata_stream_path(self, path, streamname):
+		metadatanodepath = self.get_metadata_node_path(path)
+		metadatastreampath = os.path.join(metadatanodepath, streamname)
+		self.debugmsg("metadata stream path = " + metadatastreampath)
+		return metadatastreampath
+	
+	# The metadata blob contains the metadata for a particular path, stream and data commit
+	def get_metadata_blob_path(self, path, streamname, datacommitid):
+		# metadatadatacommitid = self.find_latest_commitid_in_metadata(branchname, self.datarootcommit)
+		metadatanodepath = self.get_metadata_stream_path(path, streamname)
+		metadatablobpath = os.path.join(metadatanodepath, datacommitid)
+		self.debugmsg("metadata blob path = " + metadatablobpath)
+		return metadatablobpath
+
+	def generate_datarev(self, path):
+		if not isinstance(path, MetadataPath):
+			raise ParameterError("Passed path was not an instance of MetadataPath")
+		
+		if path.repo is None:
+			raise ParameterError("Passed a path without a repo")
+
+		datarev = MetadataPath.datarev_default_get
+		abspath = os.path.join(path.repo.workdir, path.metadatapath)
+		if os.path.isfile(abspath):
+			# Check what the status of the file is
+			status = self.status_file(path.metadatapath)
+
+			if status > pygit2.GIT_STATUS_CURRENT:
+				raise MetadataInvalidError("File has been modified but not committed so this metadata is not valid. Use '{}:{}' syntax to see metadata.".format(datarev, path.metadatapath))
+		elif os.path.isdir(abspath):
+			# Try to find the directory in the revision specified
+			try:
+				expectedtree = self.revparse_single('%s:%s' % (datarev, path.metadatapath))
+				if not isinstance(expectedtree, pygit2.Tree):
+					raise ParameterError("Path does not exist and data revision not specified")
+			except KeyError:
+				raise ParameterError("Path does not exist and data revision not specified")
+		else:
+			# If it wasn't a file or a directory, report an error
+			raise ParameterError("Path does not exist and data revision not specified")
+
+		# If we get here then the file or folder exists in the HEAD commit
+		return datarev
+
+	def write_tree_hierarchy(self, parentslist, newentryid, force=False):
+		newentry = self[newentryid]
+
+		# Get last entry as name of tree to save (work backwards in tree list)
+		newentryname = parentslist[-1]
+
+		# Use remaining entries as the parent tree's path
+		# Python does the right thing here for most strings and lists so no need to check the length of parentslist
+		newentryparentpath = os.sep.join(parentslist[0:-1])
+
+		self.debugmsg("Looking for %s/%s" % (newentryparentpath, newentryname))
+
+		try:
+			tree = self.revparse_single('{0}:{1}'.format(self.metadataref, newentryparentpath))
+			if isinstance(tree, pygit2.Tree):
+				# Found existing tree so modify it
+				treebuilder = self.TreeBuilder(tree)
+			else:
+				# Didn't find a try so check if we are allowed to overwrite it
+				if force:
+					# Create new tree
+					treebuilder = self.TreeBuilder()
+				else:
+					raise Exception("Expected Tree, got " + str(type(tree)))
+
+		except KeyError:
+			# Tree doesn't exist so create a new one
+			treebuilder = self.TreeBuilder()
+
+		if isinstance(newentry, pygit2.Blob):
+			self.debugmsg("Writing blob")
+			# Create a new tree with the blob in it, editing the last tree in the path if it exists.
+			treebuilder.insert(newentryname, newentry.id, pygit2.GIT_FILEMODE_BLOB)
+		elif isinstance(newentry, pygit2.Tree):
+			self.debugmsg("Writing tree")
+			# Create a new tree which points to the blob's tree, editing the last but one tree in the path if it exists.
+			treebuilder.insert(newentryname, newentry.id, pygit2.GIT_FILEMODE_TREE)
+		else:
+			raise Exception("Expected Blob or Tree, got " + str(type(newentry)))
+
+		treebuilderid = treebuilder.write()
+
+		self.debugmsg("Tree containing %s saved with ID %s" % (newentryname, treebuilderid.__str__()))
+
+		# If we're on the last one, len(parentslist) will be 1
+		if len(parentslist) > 1:
+			# Recurse up the tree, pass modified tree to next call of function
+			return self.write_tree_hierarchy(parentslist[0:-1], treebuilderid, force)
+		else:
+			return treebuilderid
+
+	# COPY FUNCTIONS
+	
+	# Given a path and a data rev, find the blob and then try to find where that blob was added
+	def find_data_commit_with_object(self, datarev, path):
+		datacommit = self.revparse_single(datarev)
+		if not isinstance(datacommit, pygit2.Commit):
+			raise NoDataError("Data commit does not exist")
+
+		try:
+			objectatpath = self.revparse_single("%s:%s" % (datarev, path))
+		except KeyError:
+			raise NoDataError("Data does not exist in commit")
+
+		if isinstance(objectatpath, pygit2.Blob):
+			datacommitwithobject = self.find_first_data_commit_with_blob(objectatpath, datacommit)
+		elif isinstance(objectatpath, pygit2.Tree):
+			datacommitwithobject = self.find_first_data_commit_with_tree(path, datacommit)
+		else:
+			raise NoDataError("Data does not exist in commit")
+
+		if datacommitwithobject is None:
+			raise NoDataError("Data does not exist in repository")
+
+		return datacommitwithobject
+
+	def find_data_commit_with_metadata(self, pathobj, returncommitwhennometadata=True):
+		if not isinstance(pathobj, MetadataPath):
+			raise ParameterError("Passed path was not an instance of MetadataPath")
+
+		# Find the data commit
+		datacommit = self.get_data_commit(pathobj.datarev)
+		dataobject = self.revparse_single("%s:%s" % (pathobj.datarev, pathobj.metadatapath))
+		datacommitwithmetadata = self.find_first_data_commit_with_metadata_for_blob(dataobject, datacommit, pathobj, returncommitwhennometadata=returncommitwhennometadata)
+
+		return datacommitwithmetadata
+
+	# Given a path, we compare the parent commit to the current commit to see if this was
+	# the commit where the tree was added. If not added at this commit, we call ourselves with the parent
+	# commit to check if the tree was added in the parent, and so on until there are no more parents.
+	# It is assumed that the tree is in the current commit when first called, otherwise this would have to be
+	# checked with a revparse_single for each call which would slow down the routine
+	def find_first_data_commit_with_tree(self, treepath, currentcommit):
+	
+		if len(currentcommit.parents) > 1:
+			raise MetadataReadError("Merges not supported")
+		elif len(currentcommit.parents) == 0:
+			# No parent so current commit is the first to contain this tree
+			return currentcommit
+		else:
+			parentcommit = currentcommit.parents[0]
+
+			try:
+				treefound = self.revparse_single("%s:%s" % (parentcommit.id, treepath))
+				if not isinstance(treefound, pygit2.Tree):
+					# Tree was updated (it used to be a blob)
+					return currentcommit
+				else:
+					# Try next one
+					return self.find_first_data_commit_with_tree(treepath, parentcommit)
+			except KeyError:
+				# Tree could not be found in the parent, so current commit is the first to contain this tree
+				return currentcommit
+
+	# Given a data object and a commit, we compare the parent commit to the current commit to see
+	# if this was the commit where the blob was added. If not added at this commit, we
+	# call ourselves with the parent commit to check if the blob was added in the parent,
+	# and so on until there are no more parents. It is assumed that the data object is in the current commit
+	# when first called otherwise this would have to be checked with a revparse_single for each call
+	# which would slow down the routine.
+	def find_first_data_commit_with_blob(self, dataobject, currentcommit):
+		currenttree = currentcommit.tree
+
+		self.debugmsg("looking for %s in %s" % (dataobject.id, currentcommit.id))
+
+		if len(currentcommit.parents) > 1:
+			raise MetadataReadError("Merges not supported")
+		elif len(currentcommit.parents) == 1:
+			# Compare against the commit's parent
+			parentcommit = currentcommit.parents[0]
+			diff = currenttree.diff_to_tree(parentcommit.tree, swap=True)
+		else:
+			# No parent commit to compare against so we will see what has been added in the first commit
+			parentcommit = None
+			diff = currenttree.diff_to_tree(swap=True)
+
+		# Check each change in the diff to see if we can find where our object was added
+		for patch in diff:
+			delta = patch.delta
+			if (delta.new_file.id == dataobject.id) \
+				and (delta.status & pygit2.GIT_DELTA_ADDED == pygit2.GIT_DELTA_ADDED):
+				return currentcommit
+
+		# Could not find the blob so check the next commit
+		if parentcommit is not None:
+			return self.find_first_data_commit_with_blob(dataobject, parentcommit)
+		else:
+			return None
+
+	# Find metadata for path, working backwards through commits starting from passed data commit ID
+	# It is assumed that the data object was is in the current commit when first called.
+	def find_first_data_commit_with_metadata_for_blob(self, dataobject, currentcommit, path, returncommitwhennometadata=True):
+		# check metadata exists in current commit. if metadata exists, return current commit, else recurse
+		
+		if not isinstance(path, MetadataPath):
+			raise ParameterError("Passed path was not an instance of MetadataPath")
+
+		# Better check the blob exists in the current commit first
+		try:
+			dataobjectcheck = self.revparse_single("%s:%s" % (currentcommit.id, path.metadatapath))
+			objectsaretrees = isinstance(dataobject, pygit2.Tree) and isinstance(dataobjectcheck, pygit2.Tree)
+			if dataobjectcheck.id != dataobject.id and not objectsaretrees:# ID is different if it is a tree so ignore if tree
+				raise ParameterError("Data object does not match at commit specified")
+		except KeyError:
+			raise ParameterError("Data object does not exist at commit specified")
+
+		# We assume the object exists, check if it has metadata
+		try:
+			# Try to get the metadata
+			metadatablobpath = self.get_metadata_blob_path(path.metadatapath, path.streamname, currentcommit.id.__str__())
+			
+			# Find metadata branch
+			metadatacommit = self.get_metadata_commit(self.metadataref)
+			
+			# Find metadata blob
+			metadatablob = self.revparse_single("%s:%s" % (metadatacommit.id, metadatablobpath))
+			if not isinstance(metadatablob, pygit2.Blob):
+				raise MetadataBlobNotFoundError("Something wrong with the metadata at " + metadatablobpath)
+			else:
+				# Found it, return this commit
+				return currentcommit
+
+		# Metadata was not added at this commit so look in parents...
+		except (KeyError, NoMetadataBranchError):
+
+			if path.datarevsearchmethod == DataRevisionMetadataSearchMethod.UseRevisionSpecifiedOnly:
+				return (currentcommit if returncommitwhennometadata else None)
+			if len(currentcommit.parents) > 1:
+				raise MetadataReadError("Merges not supported")
+			elif len(currentcommit.parents) == 1:
+				# Compare against the commit's parent
+				parentcommit = currentcommit.parents[0]
+				diff = currentcommit.tree.diff_to_tree(parentcommit.tree, swap=True)
+			else:
+				# No parent commit to compare against so we will see what has been added in the first commit
+				parentcommit = None
+				diff = currentcommit.tree.diff_to_tree(swap=True)
+
+			# Check each change in the diff to see if we can find where our object was added
+			for patch in diff:
+				delta = patch.delta
+				if (delta.new_file.id == dataobject.id) \
+					and (delta.status & pygit2.GIT_DELTA_ADDED == pygit2.GIT_DELTA_ADDED):
+					# Metadata added in current commit so do not proceed any further back and return current commit
+					return (currentcommit if returncommitwhennometadata else None)
+
+			# check blob exists in parent commit by checking ID and path
+			try:
+				if parentcommit is None:
+					return None
+				else:
+					objectatpath = self.revparse_single("%s:%s" % (parentcommit.id, path.metadatapath))
+					objectsaretrees = isinstance(dataobject, pygit2.Tree) and isinstance(objectatpath, pygit2.Tree)
+					# Data object doesn't exist so return None because we have reached a commit we cannot go past
+					if objectatpath.id != dataobject.id and not objectsaretrees:
+						return None
+					else:
+						# Check the next parent for metadata
+						return self.find_first_data_commit_with_metadata_for_blob(dataobject, parentcommit, path)
+			
+			# Data object doesn't exist in parent so return None
+			except KeyError:
+				return None
+
 	def find_path_in_repository(self, datarev, path):
 		normpath = os.path.normpath(path)
 
@@ -928,52 +967,6 @@ class MetadataRepository(pygit2.Repository):
 		metadatastreampath = self.get_metadata_stream_path(path, streamname)
 		metadatastream = self.get_metadata_tree(metadatastreampath, metadataref=metadataref)
 		return metadatastream
-
-	def find_metadata_blob(self, pathobj):
-		if not isinstance(pathobj, MetadataPath):
-			raise ParameterError("Passed path was not an instance of MetadataPath")
-
-		# Find the data commit
-		if pathobj.datarevsearchmethod == DataRevisionMetadataSearchMethod.SearchBackForEarlierMetadataAllowed:
-			datacommitwithobject = self.find_data_commit_with_object(datarev, path)
-		elif pathobj.datarevsearchmethod == DataRevisionMetadataSearchMethod.UseRevisionSpecifiedOnly:
-			datacommitwithobject = self.get_data_commit(datarev)
-		else:
-			raise ParameterError("Data revision method required")
-
-		 
-	def get_metadata_blob(self, pathreq):
-
-		# Parse path parameter
-		path = self.parse_path_parameter(pathreq, fixdatarev=True)
-
-		# Find metadata branch
-		metadatacommit = self.get_metadata_commit(self.metadataref)
-
-		# Find the data commit
-		datacommit = self.get_data_commit(path.datarev)
-		datacommitid = datacommit.id.__str__()
-
-		dataobject = self.revparse_single("%s:%s" % (path.datarev, path.metadatapath))
-		
-		datacommitwithmetadata = self.find_first_data_commit_with_metadata_for_blob(dataobject, datacommit, path)
-		
-		if datacommitwithmetadata is None:
-			raise MetadataBlobNotFoundError("Could not find metadata blob in the tree")
-
-		# Try to get the blob
-		try:
-			# Generate the path from the object requested, stream name and revision
-			metadatablobpath = self.get_metadata_blob_path(path.metadatapath, path.streamname, datacommitwithmetadata.id.__str__())
-
-			metadatablob = self.revparse_single("%s:%s" % (metadatacommit.id, metadatablobpath))
-			if not isinstance(metadatablob, pygit2.Blob):
-				raise MetadataBlobNotFoundError("Could not find metadata blob in the tree")
-			else:
-				return metadatablob
-		except KeyError:
-			raise MetadataBlobNotFoundError("Could not find metadata blob in the tree")
-
 
 	def find_fs_blob_in_repository(self, path):
 		if os.path.isfile(path):

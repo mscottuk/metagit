@@ -223,13 +223,13 @@ def parse_args():
 
 def get(args, repo):
 
-	metadatablob = repo.get_metadata_blob(args.path)
+	metadatablob = repo.find_metadata_blob(args.path)
 	sys.stdout.write(metadatablob.data)
 
 
 def getvalue(args, repo):
 	
-	metadatablob = repo.get_metadata_blob(args.path)
+	metadatablob = repo.find_metadata_blob(args.path)
 	data = json.loads(metadatablob.data)
 	for key, value in data.iteritems():
 		if (args.keyfilter is None or args.keyfilter == key.__str__()):
@@ -251,7 +251,7 @@ def setvalue(args, repo):
 
 	try:
 		# Get the metadata
-		metadatablob = repo.get_metadata_blob(args.path)
+		metadatablob = repo.find_metadata_blob(args.path)
 		jsondict = json.loads(metadatablob.data)
 	except (MetadataBlobNotFoundError, NoMetadataBranchError):
 		jsondict = json.loads("{}")
